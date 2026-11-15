@@ -366,43 +366,8 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         result["_daylight"] = bool(is_day)
     elif sun:
         result["_daylight"] = None
-    result["summary"] = now_text(result)
-    result["card"] = display.now_card(result)
-    return display.strip_private(_clean(result))
-
-
-def now_text(r: dict[str, Any]) -> str:
-    """Plain-text brief (also what /weather prints)."""
-    lines = [f"{r['place']['name']} · {r.get('as_of', '')}"]
-    c = r.get("current") or {}
-    if c:
-        bits = [c.get("temp"), c.get("sky")]
-        line = ", ".join(str(b) for b in bits if b)
-        if c.get("feels_like") and c.get("feels_like") != c.get("temp"):
-            line += f" (feels {c['feels_like']})"
-        extras = [f"wind {c['wind']}" if c.get("wind") else None,
-                  f"humidity {c['humidity_pct']}%" if c.get("humidity_pct") is not None else None]
-        extra = " · ".join(e for e in extras if e)
-        lines.append(line + (f" · {extra}" if extra else ""))
-    for alert in r.get("alerts") or []:
-        mark = "🚨" if alert.get("life_threatening") else "⚠️"
-        until = f" until {alert['until']}" if alert.get("until") else ""
-        lines.append(f"{mark} {alert['event']}{until}")
-    for p in (r.get("forecast") or [])[:2]:
-        if "name" in p:
-            text = p.get("detail") or f"{p.get('sky')}, {p.get('high_or_low')} {p.get('temp')}°"
-            lines.append(f"{p['name']}: {text}")
-        else:
-            chance = p.get("precip_chance_pct")
-            lines.append(f"{p.get('day')}: {p.get('sky')}, {p.get('high')}°/{p.get('low')}°"
-                         + (f", {chance}% chance of precip" if chance else ""))
-    for note in r.get("notes") or []:
-        if note.startswith("⚠️"):
-            lines.append(note)
-    src = c.get("station") or c.get("source")
-    if src:
-        lines.append(f"Source: {src}" + (f", {c['observed']}" if c.get("observed") else ""))
-    return "\n".join(lines)
+    card = display.now_card(result)
+    return display.card_first(display.strip_private(_clean(result)), card)
 
 
 # --- forecast ---------------------------------------------------------------------------------
@@ -456,8 +421,7 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
         notes.append("⚠️ No forecast source answered; try again in a minute")
     result["sources"] = sources
     result["notes"] = notes
-    result["card"] = display.forecast_card(result)
-    return display.strip_private(_clean(result))
+    return display.card_first(display.strip_private(_clean(result)), display.forecast_card(result))
 
 
 # --- alerts -----------------------------------------------------------------------------------
@@ -502,8 +466,8 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     }
     if not items:
         result["summary"] = f"No active NWS alerts for {label}."
-    result["card"] = display.alerts_card(result)
-    return _clean(result) | {"count": len(items), "alerts": result["alerts"]}
+    return display.card_first(_clean(result) | {"count": len(items), "alerts": result["alerts"]},
+                              display.alerts_card(result))
 
 
 def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
