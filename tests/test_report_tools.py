@@ -163,3 +163,18 @@ def test_schemas_are_well_formed(schema):
     assert schema["parameters"]["type"] == "object"
     assert set(schema["parameters"].get("required", [])) <= set(schema["parameters"]["properties"])
     assert len(schema["description"].split(".")[0]) <= 110
+
+
+def test_numpy_is_not_loaded_just_by_loading_the_plugin():
+    import subprocess
+    import sys
+
+    code = (
+        "import importlib.util, sys; root = sys.argv[1]; "
+        "spec = importlib.util.spec_from_file_location('bw', root + '/__init__.py', "
+        "submodule_search_locations=[root]); "
+        "m = importlib.util.module_from_spec(spec); sys.modules['bw'] = m; spec.loader.exec_module(m); "
+        "print('numpy' in sys.modules)"
+    )
+    out = subprocess.run([sys.executable, "-I", "-c", code, str(ROOT)], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False"
