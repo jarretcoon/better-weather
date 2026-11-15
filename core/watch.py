@@ -14,7 +14,9 @@ below) and ``rain`` (a heads-up when rain is likely to start within the hour).
 
 from __future__ import annotations
 
+import copy
 import json
+import logging
 import os
 import re
 import time
@@ -25,6 +27,8 @@ from typing import Any
 from . import http, units
 from .clock import now_utc
 from .sources import nws, openmeteo
+
+logger = logging.getLogger(__name__)
 
 CONFIG_NAME = "watch.json"
 STATE_NAME = "watch-state.json"
@@ -59,7 +63,7 @@ def event_key(alert: dict[str, Any], raw_params: dict[str, Any] | None = None) -
         if match:
             action, office, phen, sig, etn = match.groups()
             return f"{office}.{phen}.{sig}.{etn}", action
-    return f"{alert['event']}|{alert.get('starts') or alert.get('id')}", None
+    return f"{alert['event']}|{alert.get('id')}", None
 
 
 def _wanted(event: str, level: str, life_threatening: bool) -> bool:
@@ -104,6 +108,11 @@ def _format_new(alert: dict[str, Any], place: str, fmt_time: Any) -> str:
     return "\n".join(lines)
 
 
+# VTEC actions that mean the event is over or has been replaced by another one.
+_OVER = {"CAN": "was cancelled", "UPG": "was replaced by a stronger alert", "EXP": "has expired"}
+MISSES_BEFORE_ENDED = 2  # an alert must be missing from 2 checks in a row before we say it ended
+
+
 def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """One pass. Returns (message or "", new state). Pure apart from the network fetches."""
     place = str(config.get("name") or "home")
@@ -117,8 +126,8 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
         return units.day_clock(dt.astimezone(tz), config.get("clock") or "12h", now) if dt else None
 
     messages: list[str] = []
-    state = dict(state)
-    sent: dict[str, Any] = dict(state.get("sent") or {})
+    state = copy.deepcopy(state)  # never mutate the caller's copy (it is what gets saved on a crash)
+    sent: dict[str, dict[str, Any]] = state.get("sent") or {}
 
     try:
         fetched = nws.alerts_at(lat, lon, ttl=0)  # always ask the NWS fresh
@@ -137,35 +146,58 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
         messages.append("✅ Alert checks are working again.")
     state["failures"] = 0
 
-    raw_by_id = {str((f.get("properties") or {}).get("id")): (f.get("properties") or {}).get("parameters") or {}
-                 for f in (fetched.data or {}).get("features") or []}
-    active: dict[str, dict[str, Any]] = {}
+    raw_params = {str((f.get("properties") or {}).get("id")): (f.get("properties") or {}).get("parameters") or {}
+                  for f in (fetched.data or {}).get("features") or []}
+    current: dict[str, dict[str, Any]] = {}
+    over: dict[str, str] = {}
     for alert in nws.normalize_alerts(fetched.data):
-        if not _wanted(alert["event"], level, bool(alert.get("life_threatening"))):
+        key, action = event_key(alert, raw_params.get(alert["id"]))
+        if action is None:  # no VTEC: follow references so an update keeps the key it was pushed under
+            refs = set(alert.get("references") or []) | {alert["id"]}
+            key = next((k for k, entry in sent.items() if entry.get("id") in refs), key)
+        if action in _OVER:
+            over[key] = _OVER[action]
             continue
-        key, action = event_key(alert, raw_by_id.get(alert["id"]))
-        active[key] = alert
+        if _wanted(alert["event"], level, bool(alert.get("life_threatening"))):
+            current.setdefault(key, alert)  # alerts arrive most urgent first
+    for key in over:
+        current.pop(key, None)
+
+    for key, alert in current.items():
         previous = sent.get(key)
         if previous is None:
-            if action in {"CAN", "EXP"}:
-                continue
             messages.append(_format_new(alert, place, fmt_time))
-            sent[key] = {"event": alert["event"], "ends": alert.get("ends"), "at": time.time()}
+            sent[key] = {"event": alert["event"], "ends": alert.get("ends"), "id": alert["id"],
+                         "at": time.time(), "missed": 0}
             continue
-        if action in {"EXT", "EXA", "EXB"} and alert.get("ends") and alert.get("ends") != previous.get("ends"):
-            old, new = units.parse_time(previous.get("ends")), units.parse_time(alert.get("ends"))
-            if old and new and new - old >= timedelta(minutes=10):
-                messages.append(f"⏱ {alert['event']} for {place} extended until {fmt_time(alert['ends'])}.")
-            previous["ends"] = alert.get("ends")
+        previous["missed"] = 0
+        previous["id"] = alert["id"]
+        new_end = alert.get("ends")
+        if new_end and new_end != previous.get("ends"):
+            old_dt, new_dt = units.parse_time(previous.get("ends")), units.parse_time(new_end)
+            if old_dt and new_dt and new_dt - old_dt >= timedelta(minutes=10):
+                messages.append(f"⏱ {alert['event']} for {place} extended until {fmt_time(new_end)}.")
+            previous["ends"] = new_end
 
     for key in list(sent):
-        if key not in active:
-            gone = sent.pop(key)
-            if _push_ended(str(gone.get("event") or "")):
-                messages.append(f"✅ {gone['event']} for {place} has ended or expired.")
+        if key in current:
+            continue
+        entry = sent[key]
+        reason = over.get(key)
+        if reason is None:  # just missing from this response: wait for a second miss before believing it
+            entry["missed"] = int(entry.get("missed") or 0) + 1
+            if entry["missed"] < MISSES_BEFORE_ENDED:
+                continue
+            reason = "has ended or expired"
+        del sent[key]
+        if _push_ended(str(entry.get("event") or "")):
+            messages.append(f"✅ {entry['event']} for {place} {reason}.")
 
     state["sent"] = sent
-    messages.extend(_extras(config, state, lat, lon, now))
+    try:  # the optional extras must never cost a warning
+        messages.extend(_extras(config, state, lat, lon, now))
+    except Exception:
+        logger.warning("better-weather: freeze/rain extras failed", exc_info=True)
     return "\n\n".join(messages), state
 
 
@@ -183,7 +215,8 @@ def _extras(config: dict[str, Any], state: dict[str, Any], lat: float, lon: floa
         daily = data.get("daily") or {}
         lows = daily.get("temperature_2m_min") or []
         tonight = units.num(lows[1]) if len(lows) > 1 else None  # tomorrow morning's low
-        threshold = float(config.get("freeze_at_c", 0.0))
+        threshold = units.num(config.get("freeze_at_c"))
+        threshold = 0.0 if threshold is None else threshold
         if tonight is not None and tonight <= threshold:
             low = units.temp(tonight, "us" if us else "metric")
             out.append(f"🥶 Freeze tonight in {place}: low near {low}. Cover plants, bring pets in, "
@@ -210,22 +243,36 @@ def _extras(config: dict[str, Any], state: dict[str, Any], lat: float, lon: floa
     return out
 
 
+def _rate_limited(state: dict[str, Any], key: str, hours: float) -> bool:
+    """True when a notice under *key* may be sent now (and records that it was)."""
+    last = float(state.get(key) or 0)
+    if time.time() - last < hours * 3600:
+        return False
+    state[key] = time.time()
+    return True
+
+
 def run(data_dir: Path) -> str:
-    """Entry point for the cron script. Never raises for ordinary failures (prints nothing)."""
-    config = _load(data_dir / CONFIG_NAME, None)
-    if not config:
-        return ("⚠️ Better Weather warning pushes are set up but have no home location. "
-                "Run: hermes better-weather push setup")
+    """Entry point for the cron script. Prints nothing on a quiet tick; problems are reported rarely."""
     state_path = data_dir / STATE_NAME
     state = _load(state_path, {})
+    config = _load(data_dir / CONFIG_NAME, None)
+    if not isinstance(config, dict) or "lat" not in config or "lon" not in config:
+        message = ""
+        if _rate_limited(state, "config_notice_at", 24):
+            message = ("⚠️ Better Weather warning pushes have no place to watch. Run: hermes better-weather push "
+                       "setup (or remove the job: hermes cron remove better-weather-alerts)")
+        _save(state_path, state)
+        return message
+    if config.get("paused"):
+        return ""
     try:
         message, state = check(config, state)
         state["crashes"] = 0
     except Exception as exc:  # a bug must say so once, not every 2 minutes
         state["crashes"] = int(state.get("crashes") or 0) + 1
-        quiet_until = float(state.get("crash_notice_at") or 0) + 6 * 3600
         message = ""
-        if state["crashes"] == 1 or time.time() > quiet_until:
+        if state["crashes"] == 1 or _rate_limited(state, "crash_notice_at", 6):
             state["crash_notice_at"] = time.time()
             message = (f"⚠️ Better Weather's warning check hit an error ({type(exc).__name__}: {exc}). "
                        "It keeps retrying; check weather.gov if storms are near.")

@@ -203,7 +203,11 @@ def normalize_alerts(data: Any, *, text_limit: int = 3000) -> list[dict[str, Any
             "issued_by": p.get("senderName"),
             "area": p.get("areaDesc"),
             "starts": p.get("onset") or p.get("effective"),
-            "ends": p.get("ends") or p.get("expires"),
+            # `ends` is None for "until further notice"; `expires` is only when the next update is due.
+            "ends": p.get("ends"),
+            "expires": p.get("expires"),
+            "references": [r.get("identifier") for r in p.get("references") or []
+                           if isinstance(r, dict) and r.get("identifier")],
             "message_type": p.get("messageType"),
             "details": details,
             "description": description[:text_limit] + ("…" if len(description) > text_limit else ""),

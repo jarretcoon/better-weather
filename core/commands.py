@@ -212,6 +212,8 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     setup.add_argument("--freeze", action="store_true", help="Also a 3 PM heads-up when tonight freezes")
     setup.add_argument("--rain", action="store_true", help="Also a heads-up when rain starts within the hour")
     push_subs.add_parser("status", help="Show what is being watched")
+    push_subs.add_parser("off", help="Pause pushes (the cron job stays, but stays silent)")
+    push_subs.add_parser("on", help="Resume pushes")
     push_subs.add_parser("check", help="Run one check now and print what would be sent (sends nothing)")
     parser.set_defaults(func=handle_cli)
 
@@ -269,6 +271,12 @@ def _push_cli(args: argparse.Namespace) -> int:
     if not config:
         print("Not set up. Run: hermes better-weather push setup")
         return 1
+    if sub in {"off", "on"}:
+        config["paused"] = sub == "off"
+        watch._save(data_dir / watch.CONFIG_NAME, config)
+        print("Pushes paused. To remove the job entirely: hermes cron remove better-weather-alerts"
+              if sub == "off" else f"Pushes on for {config.get('name')}.")
+        return 0
     state = watch._load(data_dir / watch.STATE_NAME, {})
     if sub == "status":
         print(json.dumps({"config": config, "tracking": state.get("sent", {}),

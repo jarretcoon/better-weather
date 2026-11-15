@@ -6,8 +6,8 @@ CONFIG = {"name": "Des Moines, IA", "lat": 41.6, "lon": -93.61, "timezone": "Ame
 
 
 def _feature(ident, event, vtec_action="NEW", etn="0012", phen="TO", sig="W", ends="2026-11-15T15:45:00-06:00",
-             msg="Alert", refs=(), instruction="TAKE COVER NOW!"):
-    return {"properties": {
+             msg="Alert", refs=(), instruction="TAKE COVER NOW!", vtec=True):
+    feature = {"properties": {
         "id": ident, "event": event, "severity": "Extreme" if "Tornado Warning" in event else "Moderate",
         "status": "Actual", "messageType": msg, "references": [{"identifier": r} for r in refs],
         "headline": f"{event} issued", "description": "...", "instruction": instruction, "ends": ends,
@@ -15,6 +15,9 @@ def _feature(ident, event, vtec_action="NEW", etn="0012", phen="TO", sig="W", en
         "parameters": {"VTEC": [f"/O.{vtec_action}.KDMX.{phen}.{sig}.{etn}.261115T2100Z-261115T2145Z/"],
                        "tornadoDetection": ["RADAR INDICATED"]},
     }}
+    if not vtec:
+        del feature["properties"]["parameters"]["VTEC"]
+    return feature
 
 
 def _serve(features):
@@ -39,6 +42,8 @@ def test_new_warning_pushes_once_then_stays_quiet_then_says_ended():
     assert message == ""
 
     http.set_transport_for_tests(_serve([]))
+    message, state = watch.check(CONFIG, state)
+    assert message == ""  # one missing response could be a glitch: wait for a second miss
     message, state = watch.check(CONFIG, state)
     assert message == "✅ Tornado Warning for Des Moines, IA has ended or expired."
     assert state["sent"] == {}
@@ -97,5 +102,61 @@ def test_setup_writes_a_valid_script_and_config(tmp_path):
                             level="warnings", freeze=True, rain=False, units_="us", clock="12h")
     script = (tmp_path / "home" / "scripts" / watch.SCRIPT_NAME).read_text(encoding="utf-8")
     compile(script, "script", "exec")
-    assert str(tmp_path / "data") in script and "--no-agent" in out["cron_command"]
+    assert repr(str(tmp_path / "data")) in script and "--no-agent" in out["cron_command"]  # escaped on Windows
     assert watch._load(tmp_path / "data" / watch.CONFIG_NAME, {})["level"] == "warnings"
+
+
+# --- regressions from the independent review -----------------------------------------------------
+
+def test_broken_extras_never_block_a_warning(monkeypatch):
+    def boom(*_a, **_k):
+        raise TypeError("bad freeze setting")
+
+    monkeypatch.setattr(watch, "_extras", boom)
+    http.set_transport_for_tests(_serve([_feature("a1", "Tornado Warning")]))
+    message, state = watch.check({**CONFIG, "freeze": True}, {})
+    assert "TORNADO WARNING" in message and state["sent"]
+
+
+def test_cancel_or_upgrade_without_references_is_not_pushed_and_ends_the_old_one():
+    upgraded = _feature("u1", "Gale Watch", vtec_action="UPG", phen="GL", sig="A", etn="0006", instruction="")
+    http.set_transport_for_tests(_serve([upgraded]))
+    assert watch.check({**CONFIG, "level": "all"}, {})[0] == ""  # a replaced watch is not news
+
+    http.set_transport_for_tests(_serve([_feature("w1", "Tornado Watch", sig="A", etn="0101", instruction="")]))
+    _, state = watch.check(CONFIG, {})
+    http.set_transport_for_tests(_serve([_feature("w2", "Tornado Watch", sig="A", etn="0101", vtec_action="CAN",
+                                                  instruction="")]))
+    message, state = watch.check(CONFIG, state)
+    assert message == "✅ Tornado Watch for Des Moines, IA was cancelled." and state["sent"] == {}
+
+
+def test_alert_without_vtec_keeps_its_key_through_updates():
+    first = _feature("c1", "Civil Emergency Message", vtec=False, instruction="")
+    http.set_transport_for_tests(_serve([first]))
+    message, state = watch.check(CONFIG, {})
+    assert "CIVIL EMERGENCY MESSAGE" in message
+    update = _feature("c2", "Civil Emergency Message", vtec=False, msg="Update", refs=["c1"], instruction="")
+    update["properties"]["onset"] = "2026-11-15T16:00:00-06:00"
+    http.set_transport_for_tests(_serve([update]))
+    message, state = watch.check(CONFIG, state)
+    assert message == "" and len(state["sent"]) == 1
+
+
+def test_until_further_notice_has_no_made_up_end_time():
+    flood = _feature("f1", "Flood Warning", phen="FL", etn="0007", ends=None, instruction="Turn around, don't drown.")
+    http.set_transport_for_tests(_serve([flood]))
+    message, _ = watch.check(CONFIG, {})
+    assert message.splitlines()[0] == "⚠️ FLOOD WARNING — Des Moines, IA"
+
+
+def test_missing_settings_are_reported_once_a_day(tmp_path):
+    first = watch.run(tmp_path)
+    second = watch.run(tmp_path)
+    assert "no place to watch" in first and second == ""
+
+
+def test_paused_pushes_stay_silent(tmp_path):
+    watch._save(tmp_path / watch.CONFIG_NAME, {**CONFIG, "paused": True})
+    http.set_transport_for_tests(_serve([_feature("a1", "Tornado Warning")]))
+    assert watch.run(tmp_path) == ""
