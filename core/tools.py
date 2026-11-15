@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from . import climate, http, insight, places, report, scorecard, settings, visuals
+from . import climate, http, insight, places, report, scorecard, settings, travel, visuals, water
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,28 @@ def weather_scorecard(args: dict[str, Any]) -> dict[str, Any]:
     return scorecard.report(home, _units(args), int(args.get("days") or 30))
 
 
+@safe
+def weather_travel(args: dict[str, Any]) -> dict[str, Any]:
+    airport, destination = str(args.get("airport") or "").strip(), str(args.get("destination") or "").strip()
+    if not airport and not destination:
+        raise places.PlaceError("Give an airport code, a destination, or both.")
+    s = settings.current()
+    out: dict[str, Any] = {}
+    try:
+        if airport:
+            out["airport"] = travel.airport(airport, _units(args), s.clock)
+        if destination:
+            out["destination"] = travel.arrival(places.resolve(destination), args.get("arrive"), _units(args), s.clock)
+    except ValueError as exc:
+        raise places.PlaceError(str(exc)) from exc
+    return out
+
+
+@safe
+def weather_water(args: dict[str, Any]) -> dict[str, Any]:
+    return water.water(_place(args), _units(args), settings.current().clock)
+
+
 TOOLS: tuple[tuple[str, Handler], ...] = (
     ("weather", weather),
     ("weather_forecast", weather_forecast),
@@ -182,4 +204,6 @@ TOOLS: tuple[tuple[str, Handler], ...] = (
     ("weather_discussion", weather_discussion),
     ("weather_best_time", weather_best_time),
     ("weather_scorecard", weather_scorecard),
+    ("weather_travel", weather_travel),
+    ("weather_water", weather_water),
 )

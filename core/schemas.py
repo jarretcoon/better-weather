@@ -238,5 +238,30 @@ SCORECARD: dict[str, Any] = {
         "units": _UNITS}, "required": []},
 }
 
+TRAVEL: dict[str, Any] = {
+    "name": "weather_travel",
+    "description": (
+        "Travel weather for airports and destinations. "
+        "An airport's conditions, forecast and FAA delays, or the weather at a destination when you arrive. "
+        "Give `airport` (DSM, KORD) for flight weather and delays, and/or `destination` plus `arrive` for "
+        "what to expect there."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "airport": {"type": "string", "description": "Airport code, 3-letter (DSM) or 4-letter (KDSM)."},
+        "destination": {"type": "string", "description": "Where you're going (any place form)."},
+        "arrive": {"type": "string", "description": "Arrival time, local at the destination: YYYY-MM-DDTHH:MM."},
+        "units": _UNITS}, "required": []},
+}
+
+WATER: dict[str, Any] = {
+    "name": "weather_water",
+    "description": (
+        "Rivers, tides and waves near a place. "
+        "River levels against flood stage (US), tide times (US coasts) and waves (coasts and big lakes). "
+        "Use for 'is the river flooding', 'how high is the river', 'tides', 'waves'."
+    ),
+    "parameters": {"type": "object", "properties": {"location": _LOCATION, "units": _UNITS}, "required": []},
+}
+
 ALL = (WEATHER, FORECAST, ALERTS, SEVERE, PLACES, RADAR, SATELLITE, AIR, HISTORY, CONFIDENCE, DISCUSSION,
-       BEST_TIME, SCORECARD)
+       BEST_TIME, SCORECARD, TRAVEL, WATER)
