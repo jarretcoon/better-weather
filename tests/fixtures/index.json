@@ -1,0 +1,154 @@
+{
+ "api.open-meteo.com/v1/forecast?current=temperature_2m%2Crelative_humidity_2m%2Cdew_point_2m%2Capparent_temperature%2Cis_day%2Cprecipitation%2Cweather_code%2Ccloud_cover%2Cpressure_msl%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Capparent_temperature_max%2Capparent_temperature_min%2Cprecipitation_sum%2Csnowfall_sum%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cwind_gusts_10m_max%2Cwind_direction_10m_dominant%2Csunrise%2Csunset%2Cuv_index_max&forecast_days=3&hourly=temperature_2m%2Capparent_temperature%2Cdew_point_2m%2Cprecipitation_probability%2Cprecipitation%2Csnowfall%2Cweather_code%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccape%2Cuv_index&latitude=35.69&longitude=139.69&timezone=auto&wind_speed_unit=kmh": {
+  "file": "api_open_meteo_com_v1_forecast_current_temperature_2m_2Crelative_humidity_2m_2Cd_1c1f533c.json",
+  "status": 200
+ },
+ "api.open-meteo.com/v1/forecast?current=temperature_2m%2Crelative_humidity_2m%2Cdew_point_2m%2Capparent_temperature%2Cis_day%2Cprecipitation%2Cweather_code%2Ccloud_cover%2Cpressure_msl%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Capparent_temperature_max%2Capparent_temperature_min%2Cprecipitation_sum%2Csnowfall_sum%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cwind_gusts_10m_max%2Cwind_direction_10m_dominant%2Csunrise%2Csunset%2Cuv_index_max&forecast_days=3&hourly=temperature_2m%2Capparent_temperature%2Cdew_point_2m%2Cprecipitation_probability%2Cprecipitation%2Csnowfall%2Cweather_code%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccape%2Cuv_index&latitude=41.53&longitude=-93.65&timezone=auto&wind_speed_unit=kmh": {
+  "file": "api_open_meteo_com_v1_forecast_current_temperature_2m_2Crelative_humidity_2m_2Cd_6d17d6bb.json",
+  "status": 200
+ },
+ "api.open-meteo.com/v1/forecast?current=temperature_2m%2Crelative_humidity_2m%2Cdew_point_2m%2Capparent_temperature%2Cis_day%2Cprecipitation%2Cweather_code%2Ccloud_cover%2Cpressure_msl%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Capparent_temperature_max%2Capparent_temperature_min%2Cprecipitation_sum%2Csnowfall_sum%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cwind_gusts_10m_max%2Cwind_direction_10m_dominant%2Csunrise%2Csunset%2Cuv_index_max&forecast_days=3&hourly=temperature_2m%2Capparent_temperature%2Cdew_point_2m%2Cprecipitation_probability%2Cprecipitation%2Csnowfall%2Cweather_code%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccape%2Cuv_index&latitude=41.6&longitude=-93.61&timezone=auto&wind_speed_unit=kmh": {
+  "file": "api_open_meteo_com_v1_forecast_current_temperature_2m_2Crelative_humidity_2m_2Cd_1c81f344.json",
+  "status": 200
+ },
+ "api.open-meteo.com/v1/forecast?current=temperature_2m%2Crelative_humidity_2m%2Cdew_point_2m%2Capparent_temperature%2Cis_day%2Cprecipitation%2Cweather_code%2Ccloud_cover%2Cpressure_msl%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Capparent_temperature_max%2Capparent_temperature_min%2Cprecipitation_sum%2Csnowfall_sum%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cwind_gusts_10m_max%2Cwind_direction_10m_dominant%2Csunrise%2Csunset%2Cuv_index_max&forecast_days=3&hourly=temperature_2m%2Capparent_temperature%2Cdew_point_2m%2Cprecipitation_probability%2Cprecipitation%2Csnowfall%2Cweather_code%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccape%2Cuv_index&latitude=51.51&longitude=-0.13&timezone=auto&wind_speed_unit=kmh": {
+  "file": "api_open_meteo_com_v1_forecast_current_temperature_2m_2Crelative_humidity_2m_2Cd_91bf985c.json",
+  "status": 200
+ },
+ "api.open-meteo.com/v1/forecast?current=temperature_2m%2Crelative_humidity_2m%2Cdew_point_2m%2Capparent_temperature%2Cis_day%2Cprecipitation%2Cweather_code%2Ccloud_cover%2Cpressure_msl%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Capparent_temperature_max%2Capparent_temperature_min%2Cprecipitation_sum%2Csnowfall_sum%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cwind_gusts_10m_max%2Cwind_direction_10m_dominant%2Csunrise%2Csunset%2Cuv_index_max&forecast_days=3&hourly=temperature_2m%2Capparent_temperature%2Cdew_point_2m%2Cprecipitation_probability%2Cprecipitation%2Csnowfall%2Cweather_code%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccape%2Cuv_index&latitude=64.84&longitude=-147.72&timezone=auto&wind_speed_unit=kmh": {
+  "file": "api_open_meteo_com_v1_forecast_current_temperature_2m_2Crelative_humidity_2m_2Cd_3ef09896.json",
+  "status": 200
+ },
+ "api.open-meteo.com/v1/forecast?current=temperature_2m%2Crelative_humidity_2m%2Cdew_point_2m%2Capparent_temperature%2Cis_day%2Cprecipitation%2Cweather_code%2Ccloud_cover%2Cpressure_msl%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Capparent_temperature_max%2Capparent_temperature_min%2Cprecipitation_sum%2Csnowfall_sum%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cwind_gusts_10m_max%2Cwind_direction_10m_dominant%2Csunrise%2Csunset%2Cuv_index_max&forecast_days=5&hourly=temperature_2m%2Capparent_temperature%2Cdew_point_2m%2Cprecipitation_probability%2Cprecipitation%2Csnowfall%2Cweather_code%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccape%2Cuv_index&latitude=51.51&longitude=-0.13&timezone=auto&wind_speed_unit=kmh": {
+  "file": "api_open_meteo_com_v1_forecast_current_temperature_2m_2Crelative_humidity_2m_2Cd_2bc8f6bb.json",
+  "status": 200
+ },
+ "api.open-meteo.com/v1/forecast?current=temperature_2m%2Crelative_humidity_2m%2Cdew_point_2m%2Capparent_temperature%2Cis_day%2Cprecipitation%2Cweather_code%2Ccloud_cover%2Cpressure_msl%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Capparent_temperature_max%2Capparent_temperature_min%2Cprecipitation_sum%2Csnowfall_sum%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cwind_gusts_10m_max%2Cwind_direction_10m_dominant%2Csunrise%2Csunset%2Cuv_index_max&forecast_days=7&hourly=temperature_2m%2Capparent_temperature%2Cdew_point_2m%2Cprecipitation_probability%2Cprecipitation%2Csnowfall%2Cweather_code%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccape%2Cuv_index&latitude=41.6&longitude=-93.61&timezone=auto&wind_speed_unit=kmh": {
+  "file": "api_open_meteo_com_v1_forecast_current_temperature_2m_2Crelative_humidity_2m_2Cd_db944d24.json",
+  "status": 200
+ },
+ "api.open-meteo.com/v1/forecast?current=temperature_2m%2Crelative_humidity_2m%2Cdew_point_2m%2Capparent_temperature%2Cis_day%2Cprecipitation%2Cweather_code%2Ccloud_cover%2Cpressure_msl%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m&daily=weather_code%2Ctemperature_2m_max%2Ctemperature_2m_min%2Capparent_temperature_max%2Capparent_temperature_min%2Cprecipitation_sum%2Csnowfall_sum%2Cprecipitation_probability_max%2Cwind_speed_10m_max%2Cwind_gusts_10m_max%2Cwind_direction_10m_dominant%2Csunrise%2Csunset%2Cuv_index_max&forecast_days=9&hourly=temperature_2m%2Capparent_temperature%2Cdew_point_2m%2Cprecipitation_probability%2Cprecipitation%2Csnowfall%2Cweather_code%2Cwind_speed_10m%2Cwind_direction_10m%2Cwind_gusts_10m%2Ccape%2Cuv_index&latitude=41.6&longitude=-93.61&timezone=auto&wind_speed_unit=kmh": {
+  "file": "api_open_meteo_com_v1_forecast_current_temperature_2m_2Crelative_humidity_2m_2Cd_d63cb858.json",
+  "status": 200
+ },
+ "api.weather.gov/alerts/active?area=IA&status=actual": {
+  "file": "api_weather_gov_alerts_active_area_IA_status_actual_b38b9a32.json",
+  "status": 200
+ },
+ "api.weather.gov/alerts/active?point=41.534%2C-93.653&status=actual": {
+  "file": "api_weather_gov_alerts_active_point_41_534_2C_93_653_status_actual_343c9c19.json",
+  "status": 200
+ },
+ "api.weather.gov/alerts/active?point=41.601%2C-93.609&status=actual": {
+  "file": "api_weather_gov_alerts_active_point_41_601_2C_93_609_status_actual_d8ac7e76.json",
+  "status": 200
+ },
+ "api.weather.gov/alerts/active?point=64.838%2C-147.716&status=actual": {
+  "file": "api_weather_gov_alerts_active_point_64_838_2C_147_716_status_actual_47658da6.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/AFG/493,119/forecast": {
+  "file": "api_weather_gov_gridpoints_AFG_493_119_forecast_fa669712.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/AFG/493,119/forecast/hourly": {
+  "file": "api_weather_gov_gridpoints_AFG_493_119_forecast_hourly_1aad8539.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/AFG/493,119/stations?limit=5": {
+  "file": "api_weather_gov_gridpoints_AFG_493_119_stations_limit_5_c451f07f.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/DMX/72,47/forecast": {
+  "file": "api_weather_gov_gridpoints_DMX_72_47_forecast_2d2862ef.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/DMX/72,47/forecast/hourly": {
+  "file": "api_weather_gov_gridpoints_DMX_72_47_forecast_hourly_885992a6.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/DMX/72,47/stations?limit=5": {
+  "file": "api_weather_gov_gridpoints_DMX_72_47_stations_limit_5_dcfbc494.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/DMX/74,50/forecast": {
+  "file": "api_weather_gov_gridpoints_DMX_74_50_forecast_abe56d20.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/DMX/74,50/forecast/hourly": {
+  "file": "api_weather_gov_gridpoints_DMX_74_50_forecast_hourly_8a88b806.json",
+  "status": 200
+ },
+ "api.weather.gov/gridpoints/DMX/74,50/stations?limit=5": {
+  "file": "api_weather_gov_gridpoints_DMX_74_50_stations_limit_5_53f14ede.json",
+  "status": 200
+ },
+ "api.weather.gov/points/41.534,-93.653": {
+  "file": "api_weather_gov_points_41_534_93_653_8e306403.json",
+  "status": 200
+ },
+ "api.weather.gov/points/41.601,-93.609": {
+  "file": "api_weather_gov_points_41_601_93_609_2d994e3c.json",
+  "status": 200
+ },
+ "api.weather.gov/points/64.838,-147.716": {
+  "file": "api_weather_gov_points_64_838_147_716_fa8232ad.json",
+  "status": 200
+ },
+ "api.weather.gov/stations/KDSM": {
+  "file": "api_weather_gov_stations_KDSM_bd10ad3e.json",
+  "status": 200
+ },
+ "api.weather.gov/stations/KDSM/observations/latest": {
+  "file": "api_weather_gov_stations_KDSM_observations_latest_b885461d.json",
+  "status": 200
+ },
+ "api.weather.gov/stations/PAFB/observations/latest": {
+  "file": "api_weather_gov_stations_PAFB_observations_latest_45921e26.json",
+  "status": 200
+ },
+ "geocoding-api.open-meteo.com/v1/search?count=10&format=json&language=en&name=50309": {
+  "file": "geocoding_api_open_meteo_com_v1_search_count_10_format_json_language_en_name_503_04dbe365.json",
+  "status": 200
+ },
+ "geocoding-api.open-meteo.com/v1/search?count=10&format=json&language=en&name=Des+Moines": {
+  "file": "geocoding_api_open_meteo_com_v1_search_count_10_format_json_language_en_name_Des_161cf9de.json",
+  "status": 200
+ },
+ "geocoding-api.open-meteo.com/v1/search?count=10&format=json&language=en&name=Fairbanks": {
+  "file": "geocoding_api_open_meteo_com_v1_search_count_10_format_json_language_en_name_Fai_72be5e7e.json",
+  "status": 200
+ },
+ "geocoding-api.open-meteo.com/v1/search?count=10&format=json&language=en&name=London": {
+  "file": "geocoding_api_open_meteo_com_v1_search_count_10_format_json_language_en_name_Lon_8cc7b31b.json",
+  "status": 200
+ },
+ "geocoding-api.open-meteo.com/v1/search?count=10&format=json&language=en&name=Tokyo": {
+  "file": "geocoding_api_open_meteo_com_v1_search_count_10_format_json_language_en_name_Tok_32521c0c.json",
+  "status": 200
+ },
+ "www.spc.noaa.gov/products/outlook/day1otlk_cat.nolyr.geojson": {
+  "file": "www_spc_noaa_gov_products_outlook_day1otlk_cat_nolyr_geojson_e7b9842b.json",
+  "status": 200
+ },
+ "www.spc.noaa.gov/products/outlook/day1otlk_hail.nolyr.geojson": {
+  "file": "www_spc_noaa_gov_products_outlook_day1otlk_hail_nolyr_geojson_2a00ea21.json",
+  "status": 200
+ },
+ "www.spc.noaa.gov/products/outlook/day1otlk_torn.nolyr.geojson": {
+  "file": "www_spc_noaa_gov_products_outlook_day1otlk_torn_nolyr_geojson_da10d6ea.json",
+  "status": 200
+ },
+ "www.spc.noaa.gov/products/outlook/day1otlk_wind.nolyr.geojson": {
+  "file": "www_spc_noaa_gov_products_outlook_day1otlk_wind_nolyr_geojson_b4f485c1.json",
+  "status": 200
+ },
+ "www.spc.noaa.gov/products/outlook/day2otlk_cat.nolyr.geojson": {
+  "file": "www_spc_noaa_gov_products_outlook_day2otlk_cat_nolyr_geojson_dca1a183.json",
+  "status": 200
+ },
+ "www.spc.noaa.gov/products/outlook/day3otlk_cat.nolyr.geojson": {
+  "file": "www_spc_noaa_gov_products_outlook_day3otlk_cat_nolyr_geojson_58f69ae7.json",
+  "status": 200
+ }
+}

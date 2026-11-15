@@ -1,0 +1,5 @@
+httpx>=0.27,<1
+tzdata>=2024.1; sys_platform == 'win32'
+pytest>=8,<10
+ruff>=0.8,<1
+pyright[nodejs]>=1.1.390,<2

@@ -1,0 +1,101 @@
+{
+ "@context": [
+  "https://geojson.org/geojson-ld/geojson-context.jsonld",
+  {
+   "@version": "1.1",
+   "wx": "https://api.weather.gov/ontology#",
+   "@vocab": "https://api.weather.gov/ontology#"
+  }
+ ],
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.7df8a629502c910383b5b305339151d051f6b2af.002.1",
+   "type": "Feature",
+   "geometry": null,
+   "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.7df8a629502c910383b5b305339151d051f6b2af.002.1",
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.7df8a629502c910383b5b305339151d051f6b2af.002.1",
+    "areaDesc": "Upper Tanana Valley; Delta Junction; Tanana Flats; Eielson AFB and Salcha; Goldstream Valley and Nenana Hills; Two Rivers; Fairbanks Metro Area; Nenana",
+    "geocode": {
+     "SAME": [
+      "002240",
+      "002090",
+      "002290"
+     ],
+     "UGC": [
+      "AKZ836",
+      "AKZ837",
+      "AKZ839",
+      "AKZ840",
+      "AKZ841",
+      "AKZ843",
+      "AKZ844",
+      "AKZ845"
+     ]
+    },
+    "affectedZones": [
+     "https://api.weather.gov/zones/forecast/AKZ836",
+     "https://api.weather.gov/zones/forecast/AKZ837",
+     "https://api.weather.gov/zones/forecast/AKZ839",
+     "https://api.weather.gov/zones/forecast/AKZ840",
+     "https://api.weather.gov/zones/forecast/AKZ841",
+     "https://api.weather.gov/zones/forecast/AKZ843",
+     "https://api.weather.gov/zones/forecast/AKZ844",
+     "https://api.weather.gov/zones/forecast/AKZ845"
+    ],
+    "references": [],
+    "sent": "2026-11-14T17:04:00-09:00",
+    "effective": "2026-11-14T17:04:00-09:00",
+    "onset": "2026-11-14T17:04:00-09:00",
+    "expires": "2026-11-15T03:00:00-09:00",
+    "ends": null,
+    "status": "Actual",
+    "messageType": "Alert",
+    "category": "Met",
+    "severity": "Moderate",
+    "certainty": "Observed",
+    "urgency": "Expected",
+    "event": "Special Weather Statement",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "NWS Fairbanks AK",
+    "headline": "Special Weather Statement issued November 14 at 5:04PM AKST by NWS Fairbanks AK",
+    "description": "Patchy freezing fog is possible through much of the night for an\narea stretching northwestward from Tok to Nenana, including the\nFairbanks Metro Area, which may cause a light slippery glaze to\nform on surfaces. Use extra caution if you must travel through\nthe night.",
+    "instruction": null,
+    "response": "Execute",
+    "note": null,
+    "parameters": {
+     "AWIPSidentifier": [
+      "SPSAFG"
+     ],
+     "WMOidentifier": [
+      "WWAK83 PAFG 150204"
+     ],
+     "BLOCKCHANNEL": [
+      "EAS",
+      "NWEM",
+      "CMAS"
+     ],
+     "EAS-ORG": [
+      "WXR"
+     ]
+    },
+    "scope": "Public",
+    "code": "IPAWSv1.0",
+    "language": "en-US",
+    "web": "http://www.weather.gov",
+    "eventCode": {
+     "SAME": [
+      "SPS"
+     ],
+     "NationalWeatherService": [
+      "SPS"
+     ]
+    }
+   }
+  }
+ ],
+ "title": "Current watches, warnings, and advisories for 64.838 N, 147.716 W",
+ "updated": "2026-11-15T08:35:26+00:00"
+}

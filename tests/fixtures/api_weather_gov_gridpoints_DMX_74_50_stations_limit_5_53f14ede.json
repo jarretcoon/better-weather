@@ -1,0 +1,237 @@
+{
+ "@context": [
+  "https://geojson.org/geojson-ld/geojson-context.jsonld",
+  {
+   "@version": "1.1",
+   "wx": "https://api.weather.gov/ontology#",
+   "s": "https://schema.org/",
+   "geo": "http://www.opengis.net/ont/geosparql#",
+   "unit": "http://codes.wmo.int/common/unit/",
+   "@vocab": "https://api.weather.gov/ontology#",
+   "geometry": {
+    "@id": "s:GeoCoordinates",
+    "@type": "geo:wktLiteral"
+   },
+   "city": "s:addressLocality",
+   "state": "s:addressRegion",
+   "distance": {
+    "@id": "s:Distance",
+    "@type": "s:QuantitativeValue"
+   },
+   "bearing": {
+    "@type": "s:QuantitativeValue"
+   },
+   "value": {
+    "@id": "s:value"
+   },
+   "unitCode": {
+    "@id": "s:unitCode",
+    "@type": "@id"
+   },
+   "forecastOffice": {
+    "@type": "@id"
+   },
+   "forecastGridData": {
+    "@type": "@id"
+   },
+   "publicZone": {
+    "@type": "@id"
+   },
+   "county": {
+    "@type": "@id"
+   },
+   "observationStations": {
+    "@container": "@list",
+    "@type": "@id"
+   }
+  }
+ ],
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "id": "https://api.weather.gov/stations/KDSM",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -93.65307,
+     41.53399
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/KDSM",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 287.1216
+    },
+    "stationIdentifier": "KDSM",
+    "name": "Des Moines International Airport",
+    "timeZone": "America/Chicago",
+    "provider": "ASOS-HFM",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 9260.9226412669
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 209
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/IAZ060",
+    "county": "https://api.weather.gov/zones/county/IAC153",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/IAZ060"
+   }
+  },
+  {
+   "id": "https://api.weather.gov/stations/KIKV",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -93.56944,
+     41.68782
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/KIKV",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 270.0528
+    },
+    "stationIdentifier": "KIKV",
+    "name": "Ankeny Regional Airport",
+    "timeZone": "America/Chicago",
+    "provider": "OTHER-MTR",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 9353.3776831899
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 14
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/IAZ060",
+    "county": "https://api.weather.gov/zones/county/IAC153",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/IAZ060"
+   }
+  },
+  {
+   "id": "https://api.weather.gov/stations/KAMW",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -93.61889,
+     41.99056
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/KAMW",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 288.036
+    },
+    "stationIdentifier": "KAMW",
+    "name": "Ames, Ames Municipal Airport",
+    "timeZone": "America/Chicago",
+    "provider": "ASOS-HFM",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 42736.190938408
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 357
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/IAZ048",
+    "county": "https://api.weather.gov/zones/county/IAC169",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/IAZ048"
+   }
+  },
+  {
+   "id": "https://api.weather.gov/stations/KTNU",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -93.01902,
+     41.67014
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/KTNU",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 288.036
+    },
+    "stationIdentifier": "KTNU",
+    "name": "Newton Municipal Airport - Earl Johnson Field",
+    "timeZone": "America/Chicago",
+    "provider": "",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 48662.162897552
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 81
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/IAZ061",
+    "county": "https://api.weather.gov/zones/county/IAC099",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/IAZ061"
+   }
+  },
+  {
+   "id": "https://api.weather.gov/stations/KOXV",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -93.11667,
+     41.3
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/KOXV",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 282.8544
+    },
+    "stationIdentifier": "KOXV",
+    "name": "Knoxville",
+    "timeZone": "America/Chicago",
+    "provider": "OTHER-MTR",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 52662.920035602
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 130
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/IAZ074",
+    "county": "https://api.weather.gov/zones/county/IAC125",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/IAZ074"
+   }
+  }
+ ],
+ "observationStations": [
+  "https://api.weather.gov/stations/KDSM",
+  "https://api.weather.gov/stations/KIKV",
+  "https://api.weather.gov/stations/KAMW",
+  "https://api.weather.gov/stations/KTNU",
+  "https://api.weather.gov/stations/KOXV"
+ ],
+ "pagination": {
+  "next": "https://api.weather.gov/stations?id%5B0%5D=KADU&id%5B1%5D=KAEL&id%5B2%5D=KAFK&id%5B3%5D=KAIO&id%5B4%5D=KALO&id%5B5%5D=KAMW&id%5B6%5D=KAUM&id%5B7%5D=KAWG&id%5B8%5D=KAXA&id%5B9%5D=KBIE&id%5B10%5D=KBNW&id%5B11%5D=KBRL&id%5B12%5D=KCAV&id%5B13%5D=KCBF&id%5B14%5D=KCCY&id%5B15%5D=KCID&id%5B16%5D=KCIN&id%5B17%5D=KCNC&id%5B18%5D=KCSQ&id%5B19%5D=KDEH&id%5B20%5D=KDNS&id%5B21%5D=KDSM&id%5B22%5D=KEBS&id%5B23%5D=KEOK&id%5B24%5D=KEST&id%5B25%5D=KFET&id%5B26%5D=KFFL&id%5B27%5D=KFKA&id%5B28%5D=KFOD&id%5B29%5D=KFRM&id%5B30%5D=KFSD&id%5B31%5D=KFSW&id%5B32%5D=KFXY&id%5B33%5D=KGGI&id%5B34%5D=KHNR&id%5B35%5D=KI75&id%5B36%5D=KICL&id%5B37%5D=KIFA&id%5B38%5D=KIIB&id%5B39%5D=KIKV&id%5B40%5D=KIOW&id%5B41%5D=KLNK&id%5B42%5D=KLRJ&id%5B43%5D=KLWD&id%5B44%5D=KMCW&id%5B45%5D=KMIW&id%5B46%5D=KMJQ&id%5B47%5D=KMLE&id%5B48%5D=KMPZ&id%5B49%5D=KMUT&id%5B50%5D=KMXO&id%5B51%5D=KOLZ&id%5B52%5D=KOMA&id%5B53%5D=KOOA&id%5B54%5D=KORC&id%5B55%5D=KOTG&id%5B56%5D=KOTM&id%5B57%5D=KOXV&id%5B58%5D=KPDC&id%5B59%5D=KPEA&id%5B60%5D=KPRO&id%5B61%5D=KRDK&id%5B62%5D=KSDA&id%5B63%5D=KSHL&id%5B64%5D=KSLB&id%5B65%5D=KSPW&id%5B66%5D=KSUX&id%5B67%5D=KTNU&id%5B68%5D=KTQE&id%5B69%5D=KTVK&id%5B70%5D=KVTI&cursor=eyJzIjo1MDB9"
+ }
+}

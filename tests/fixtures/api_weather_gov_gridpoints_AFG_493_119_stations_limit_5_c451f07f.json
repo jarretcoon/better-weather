@@ -1,0 +1,237 @@
+{
+ "@context": [
+  "https://geojson.org/geojson-ld/geojson-context.jsonld",
+  {
+   "@version": "1.1",
+   "wx": "https://api.weather.gov/ontology#",
+   "s": "https://schema.org/",
+   "geo": "http://www.opengis.net/ont/geosparql#",
+   "unit": "http://codes.wmo.int/common/unit/",
+   "@vocab": "https://api.weather.gov/ontology#",
+   "geometry": {
+    "@id": "s:GeoCoordinates",
+    "@type": "geo:wktLiteral"
+   },
+   "city": "s:addressLocality",
+   "state": "s:addressRegion",
+   "distance": {
+    "@id": "s:Distance",
+    "@type": "s:QuantitativeValue"
+   },
+   "bearing": {
+    "@type": "s:QuantitativeValue"
+   },
+   "value": {
+    "@id": "s:value"
+   },
+   "unitCode": {
+    "@id": "s:unitCode",
+    "@type": "@id"
+   },
+   "forecastOffice": {
+    "@type": "@id"
+   },
+   "forecastGridData": {
+    "@type": "@id"
+   },
+   "publicZone": {
+    "@type": "@id"
+   },
+   "county": {
+    "@type": "@id"
+   },
+   "observationStations": {
+    "@container": "@list",
+    "@type": "@id"
+   }
+  }
+ ],
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "id": "https://api.weather.gov/stations/PAFB",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -147.59556,
+     64.83667
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/PAFB",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 138.0744
+    },
+    "stationIdentifier": "PAFB",
+    "name": "Fort Wainwright AAF",
+    "timeZone": "America/Anchorage",
+    "provider": "NonFedAWOS",
+    "subProvider": "TG",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 4322.4654344022
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 79
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/AKZ844",
+    "county": "https://api.weather.gov/zones/county/AKC090",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/AKZ944"
+   }
+  },
+  {
+   "id": "https://api.weather.gov/stations/PAFA",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -147.87611,
+     64.80389
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/PAFA",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 131.9784
+    },
+    "stationIdentifier": "PAFA",
+    "name": "Fairbanks, Fairbanks International Airport",
+    "timeZone": "America/Anchorage",
+    "provider": "ASOS-HFM",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 9461.864736038
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 252
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/AKZ844",
+    "county": "https://api.weather.gov/zones/county/AKC090",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/AKZ944"
+   }
+  },
+  {
+   "id": "https://api.weather.gov/stations/PAEI",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -147.1,
+     64.65
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/PAEI",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 167.0304
+    },
+    "stationIdentifier": "PAEI",
+    "name": "Fairbanks, Eielson Air Force Base",
+    "timeZone": "America/Anchorage",
+    "provider": "OTHER-MTR",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 34203.263177084
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 125
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/AKZ840",
+    "county": "https://api.weather.gov/zones/county/AKC090",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/AKZ940"
+   }
+  },
+  {
+   "id": "https://api.weather.gov/stations/PANN",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -149.08398,
+     64.54796
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/PANN",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 106.9848
+    },
+    "stationIdentifier": "PANN",
+    "name": "Nenana Municipal Airport",
+    "timeZone": "America/Anchorage",
+    "provider": "ASOS-HFM",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 73487.1751002
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 245
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/AKZ845",
+    "county": "https://api.weather.gov/zones/county/AKC290",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/AKZ945"
+   }
+  },
+  {
+   "id": "https://api.weather.gov/stations/PABI",
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -145.73333,
+     64
+    ]
+   },
+   "properties": {
+    "@id": "https://api.weather.gov/stations/PABI",
+    "@type": "wx:ObservationStation",
+    "elevation": {
+     "unitCode": "wmoUnit:m",
+     "value": 388.9248
+    },
+    "stationIdentifier": "PABI",
+    "name": "Delta Junction/Ft Greely, Allen Army Airfield",
+    "timeZone": "America/Anchorage",
+    "provider": "ASOS-HFM",
+    "subProvider": "",
+    "distance": {
+     "unitCode": "wmoUnit:m",
+     "value": 131495.92037241
+    },
+    "bearing": {
+     "unitCode": "wmoUnit:degree_(angle)",
+     "value": 133
+    },
+    "forecast": "https://api.weather.gov/zones/forecast/AKZ837",
+    "county": "https://api.weather.gov/zones/county/AKC240",
+    "fireWeatherZone": "https://api.weather.gov/zones/fire/AKZ937"
+   }
+  }
+ ],
+ "observationStations": [
+  "https://api.weather.gov/stations/PAFB",
+  "https://api.weather.gov/stations/PAFA",
+  "https://api.weather.gov/stations/PAEI",
+  "https://api.weather.gov/stations/PANN",
+  "https://api.weather.gov/stations/PABI"
+ ],
+ "pagination": {
+  "next": "https://api.weather.gov/stations?id%5B0%5D=PAAD&id%5B1%5D=PAAK&id%5B2%5D=PAAP&id%5B3%5D=PAAQ&id%5B4%5D=PABA&id%5B5%5D=PABE&id%5B6%5D=PABI&id%5B7%5D=PABL&id%5B8%5D=PABN&id%5B9%5D=PABR&id%5B10%5D=PABT&id%5B11%5D=PABV&id%5B12%5D=PACD&id%5B13%5D=PACV&id%5B14%5D=PACX&id%5B15%5D=PACZ&id%5B16%5D=PADE&id%5B17%5D=PADK&id%5B18%5D=PADL&id%5B19%5D=PADQ&id%5B20%5D=PADT&id%5B21%5D=PADU&id%5B22%5D=PAEC&id%5B23%5D=PAEG&id%5B24%5D=PAEH&id%5B25%5D=PAEI&id%5B26%5D=PAEL&id%5B27%5D=PAEN&id%5B28%5D=PAFA&id%5B29%5D=PAFB&id%5B30%5D=PAFE&id%5B31%5D=PAFK&id%5B32%5D=PAFM&id%5B33%5D=PAGA&id%5B34%5D=PAGK&id%5B35%5D=PAGL&id%5B36%5D=PAGM&id%5B37%5D=PAGS&id%5B38%5D=PAGY&id%5B39%5D=PAHC&id%5B40%5D=PAHL&id%5B41%5D=PAHN&id%5B42%5D=PAHO&id%5B43%5D=PAHP&id%5B44%5D=PAHS&id%5B45%5D=PAHV&id%5B46%5D=PAHY&id%5B47%5D=PAHZ&id%5B48%5D=PAII&id%5B49%5D=PAIL&id%5B50%5D=PAIN&id%5B51%5D=PAJC&id%5B52%5D=PAJN&id%5B53%5D=PAJV&id%5B54%5D=PAKK&id%5B55%5D=PAKN&id%5B56%5D=PAKP&id%5B57%5D=PAKT&id%5B58%5D=PAKW&id%5B59%5D=PALH&id%5B60%5D=PALJ&id%5B61%5D=PALK&id%5B62%5D=PALR&id%5B63%5D=PALU&id%5B64%5D=PALV&id%5B65%5D=PAMC&id%5B66%5D=PAMD&id%5B67%5D=PAMH&id%5B68%5D=PAML&id%5B69%5D=PAMM&id%5B70%5D=PAMR&id%5B71%5D=PAMX&id%5B72%5D=PAMY&id%5B73%5D=PANC&id%5B74%5D=PANI&id%5B75%5D=PANN&id%5B76%5D=PANT&id%5B77%5D=PANV&id%5B78%5D=PAOH&id%5B79%5D=PAOM&id%5B80%5D=PAOR&id%5B81%5D=PAOT&id%5B82%5D=PAPG&id%5B83%5D=PAPH&id%5B84%5D=PAPO&id%5B85%5D=PAPT&id%5B86%5D=PAQT&id%5B87%5D=PARC&id%5B88%5D=PARD&id%5B89%5D=PARL&id%5B90%5D=PASA&id%5B91%5D=PASC&id%5B92%5D=PASD&id%5B93%5D=PASH&id%5B94%5D=PASI&id%5B95%5D=PASK&id%5B96%5D=PASL&id%5B97%5D=PASM&id%5B98%5D=PASN&id%5B99%5D=PASO&id%5B100%5D=PASP&id%5B101%5D=PASV&id%5B102%5D=PASW&id%5B103%5D=PASX&id%5B104%5D=PATA&id%5B105%5D=PATC&id%5B106%5D=PATE&id%5B107%5D=PATG&id%5B108%5D=PATK&id%5B109%5D=PATL&id%5B110%5D=PATQ&id%5B111%5D=PATW&id%5B112%5D=PAUN&id%5B113%5D=PAUO&id%5B114%5D=PAVD&id%5B115%5D=PAVL&id%5B116%5D=PAVW&id%5B117%5D=PAWD&id%5B118%5D=PAWG&id%5B119%5D=PAWN&id%5B120%5D=PAWS&id%5B121%5D=PAYA&id%5B122%5D=PAZK&id%5B123%5D=PFSH&id%5B124%5D=PFYU&id%5B125%5D=PPIZ&cursor=eyJzIjo1MDB9"
+ }
+}
