@@ -1,7 +1,7 @@
 ---
 name: weather
 description: How to answer weather questions with Better Weather — which tool to use, how to show radar and satellite pictures, how to talk about alerts safely, and how to set up warning pushes.
-version: 0.2.0
+version: 0.3.0
 metadata:
   hermes:
     tags: [weather, forecast, alerts, severe-weather, radar, satellite]
@@ -10,7 +10,7 @@ metadata:
 
 # Better Weather
 
-Nine tools. Start light, go deeper only when asked.
+Thirteen tools. Start light, go deeper only when asked.
 
 | The user asks… | Use |
 |---|---|
@@ -22,6 +22,10 @@ Nine tools. Start light, go deeper only when asked.
 | "Show me the clouds / satellite / smoke from above" | `weather_satellite` |
 | "Is the air OK?", "Smoke?", "UV?", "Pollen?" | `weather_air` |
 | "How cold was it yesterday?", "Normal for today?", "Record high?" | `weather_history` |
+| "How sure are they?", "Will it really snow?", "How much rain could we get?" | `weather_confidence` |
+| "Why?", "What are the forecasters thinking?" | `weather_discussion` (summarize it plainly) |
+| "When should I run / mow / grill / wash the car?", "Good night for stars?" | `weather_best_time` |
+| "Which forecast should I trust?", "Who's been right lately?" | `weather_scorecard` |
 | "Home is Ankeny", "Save my mom's place as Ames" | `weather_places` |
 
 ## Pictures (radar, satellite)
@@ -57,6 +61,12 @@ If the user wants warnings pushed to them automatically:
 
 Scheduled briefs with the AI (morning brief, week ahead, weekend) are blueprints:
 `/blueprint better-weather:morning-brief` and friends.
+
+## Confidence and the scorecard
+- For anything 3+ days out, a quick `weather_confidence` check keeps you honest: say "about 60% of
+  model runs show rain" rather than a flat yes or no, and give highs as a range when confidence is low.
+- The scorecard needs about two weeks of daily checks before it names a most-accurate source. Until
+  then, say it's still learning.
 
 ## Answer style
 - Lead with what matters: temperature and sky now, then what's coming, then alerts.

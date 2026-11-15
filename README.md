@@ -24,6 +24,10 @@ same on macOS, Windows and Linux.
 | `weather_satellite` | GOES satellite picture: true color, infrared or water vapor, still or animated. |
 | `weather_air` | Air quality (AQI, smoke, ozone), UV, and pollen in Europe; now and the worst hour ahead. |
 | `weather_history` | Past days (up to 31 at a time). US: official station records with normals and record highs/lows. |
+| `weather_confidence` | How sure the forecast is: odds of rain/snow and big amounts, likely high/low ranges, from 80+ model runs. |
+| `weather_discussion` | The NWS forecasters' own write-up (key messages, reasoning, uncertainty) for a US place. |
+| `weather_best_time` | Best hours for walk, run, bike, golf, mow, grill, outdoor, car wash or stargazing. |
+| `weather_scorecard` | Which forecast (NWS or GFS/ECMWF/ICON/GEM/blend) has been most accurate at home; learns daily. |
 
 Pictures come back as `MEDIA:/path` lines, which Hermes sends as real images in Telegram and shows
 inline in the Desktop app.

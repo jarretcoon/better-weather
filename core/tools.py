@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from . import climate, http, places, report, settings, visuals
+from . import climate, http, insight, places, report, scorecard, settings, visuals
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,28 @@ def weather_history(args: dict[str, Any]) -> dict[str, Any]:
         raise places.PlaceError(str(exc)) from exc
 
 
+@safe
+def weather_confidence(args: dict[str, Any]) -> dict[str, Any]:
+    return insight.confidence(_place(args), _units(args), int(args.get("days") or 7))
+
+
+@safe
+def weather_discussion(args: dict[str, Any]) -> dict[str, Any]:
+    return insight.discussion(_place(args), settings.current().clock)
+
+
+@safe
+def weather_best_time(args: dict[str, Any]) -> dict[str, Any]:
+    return insight.best_time(_place(args), args.get("activity"), _units(args), settings.current().clock,
+                             int(args.get("days") or 3))
+
+
+@safe
+def weather_scorecard(args: dict[str, Any]) -> dict[str, Any]:
+    home = places.resolve("home")
+    return scorecard.report(home, _units(args), int(args.get("days") or 30))
+
+
 TOOLS: tuple[tuple[str, Handler], ...] = (
     ("weather", weather),
     ("weather_forecast", weather_forecast),
@@ -156,4 +178,8 @@ TOOLS: tuple[tuple[str, Handler], ...] = (
     ("weather_satellite", weather_satellite),
     ("weather_air", weather_air),
     ("weather_history", weather_history),
+    ("weather_confidence", weather_confidence),
+    ("weather_discussion", weather_discussion),
+    ("weather_best_time", weather_best_time),
+    ("weather_scorecard", weather_scorecard),
 )

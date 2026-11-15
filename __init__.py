@@ -94,4 +94,19 @@ def register(ctx: Any) -> None:
                 add_blueprint(spec.pop("key"), category="weather", **spec)
             except Exception:
                 logger.debug("better-weather: blueprint %s not registered", bp["key"], exc_info=True)
+    add_idle = getattr(ctx, "register_idle_task", None)
+    if callable(add_idle):
+        try:
+            add_idle("scorecard", _scorecard_job, interval_hours=6, min_idle_hours=0, first_run="immediate")
+        except Exception:
+            logger.debug("better-weather: scorecard idle task not registered", exc_info=True)
     logger.info("Better Weather loaded: %d tools", len(tools.TOOLS))
+
+
+def _scorecard_job(_run: Any = None) -> str | None:
+    """Daily forecast-scorecard upkeep (Hermes idle task). Quiet when no home is set."""
+    from .core import places, scorecard
+
+    if not settings.current().home:
+        return None
+    return scorecard.update(places.resolve("home"))
