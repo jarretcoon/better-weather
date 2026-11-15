@@ -238,3 +238,12 @@ def test_snow_is_called_snow():
     http.set_transport_for_tests(_serve_model(_model("2026-12-20T13:00", [-4.0] * 4, chance=90, precip=0.6,
                                                      snow=0.5)))
     assert watch.check(RAIN, {})[0] == "🌨️ Snow likely to start in Des Moines, IA within the hour."
+
+
+def test_no_first_freeze_claim_when_it_froze_last_night_even_without_history():
+    _at("2026-11-15T15:05")
+    # model rows start 3 days back: last night dropped to -4°C, tonight -2°C
+    temps = [2.0] * 60 + [-4.0] * 6 + [6.0] * 6 + [1.0] * 9 + [-2.0] * 10 + [3.0] * 10
+    http.set_transport_for_tests(_serve_model(_model("2026-11-12T00:00", temps)))
+    message, state = watch.check(FREEZE, {})
+    assert message == "" and state["last_freeze_night"] == "2026-11-15"
