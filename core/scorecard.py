@@ -79,6 +79,13 @@ def _meta(key: str, value: str | None = None) -> str | None:
         return row[0] if row else None
 
 
+def _meta_delete(key: str) -> None:
+    with _lock:
+        db = _db()
+        db.execute("DELETE FROM meta WHERE key = ?", (key,))
+        db.commit()
+
+
 def _today(place: Place) -> date:
     return now_utc().astimezone(units.zone(place.timezone)).date()
 
@@ -129,9 +136,39 @@ def _place_key(place: Place) -> str:
     return f"{place.lat:.2f},{place.lon:.2f}"
 
 
+def _stored_home() -> str | None:
+    home = _meta("home")
+    if home:
+        return home
+    old = _meta("place")  # 0.8.x wrote "name|lat|lon"
+    try:
+        _, lat, lon = str(old).rsplit("|", 2)
+        return f"{float(lat):.2f},{float(lon):.2f}"
+    except ValueError:
+        return None
+
+
 def _same_home(place: Place) -> bool:
-    stored = _meta("home")
+    stored = _stored_home()
     return stored is None or stored == _place_key(place)
+
+
+HOME_CONFIRM_S = 6 * 3600
+
+
+def _home_moved(place: Place) -> bool:
+    """A different home must show up twice, 6+ hours apart, before the history is cleared, so one odd
+    lookup (a service down, a name resolving somewhere else) can't wipe weeks of data."""
+    key, now = _place_key(place), now_utc().timestamp()
+    seen = str(_meta("home_candidate") or "")
+    seen_key, _, since = seen.partition("@")
+    if seen_key == key:
+        try:
+            return now - float(since) >= HOME_CONFIRM_S
+        except ValueError:
+            pass
+    _meta("home_candidate", f"{key}@{now:.0f}")
+    return False
 
 
 def _start_over(place: Place) -> None:
@@ -148,7 +185,11 @@ def _start_over(place: Place) -> None:
 def collect(place: Place) -> int:
     """Save today's forecasts for the next 3 days (once per local day). Returns rows written."""
     if not _same_home(place):
+        if not _home_moved(place):
+            return 0
         _start_over(place)
+    elif _meta("home_candidate"):
+        _meta_delete("home_candidate")  # home is back to normal: forget the odd one out
     today = _today(place)
     if _meta("collected_day") == today.isoformat():
         return 0
@@ -256,7 +297,9 @@ def update_in_background() -> None:
 
 def report(place: Place, units_: str, days: int = 30) -> dict[str, Any]:
     if not _same_home(place):
-        _start_over(place)
+        return {"place": place.public(), "ranking": [], "notes": [
+            "Home changed recently. The scorecard starts over for the new home once it's confirmed "
+            "(within about 6 hours) and needs about two weeks before it names a winner."]}
     today = _today(place)
     since = (today - timedelta(days=max(7, min(int(days or 30), 365)))).isoformat()
     with _lock:

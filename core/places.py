@@ -3,8 +3,14 @@ a saved place name) into coordinates."""
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
+import tempfile
+import threading
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from . import http, settings
@@ -40,6 +46,9 @@ _HOME_WORDS = {"", "home", "here", "my house", "my place", "house", "local", "my
 _COORDS = re.compile(r"^\s*(-?\d{1,2}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)\s*$")
 _ZIP = re.compile(r"^\d{5}(?:-\d{4})?$")
 _ICAO = re.compile(r"^[A-Z][A-Z0-9]{3}$")
+PLACES_FILE = "places.json"  # in the plugin's data folder, so the Desktop backend sees the same places
+_places_lock = threading.RLock()
+logger = logging.getLogger(__name__)
 
 
 class PlaceError(Exception):
@@ -184,25 +193,66 @@ def _coords(lat: float, lon: float) -> Place:
     return Place(name, lat, lon, timezone=tz, kind="coords")
 
 
+def _places_path() -> Path | None:
+    directory = settings.data_dir()
+    return directory / PLACES_FILE if directory else None
+
+
+def _write_places(path: Path, places: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".places.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(places, handle, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def saved_places() -> dict[str, dict[str, Any]]:
-    value = settings.current().state_get("places", {})
-    return dict(value) if isinstance(value, dict) else {}
+    path = _places_path()
+    if path is None:  # outside Hermes (tests, a bare import): in-memory state
+        value = settings.current().state_get("places", {})
+        return dict(value) if isinstance(value, dict) else {}
+    with _places_lock:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            legacy = settings.current().state_get("places", {})  # 0.8.x kept them in Hermes plugin state
+            if isinstance(legacy, dict) and legacy:
+                _write_places(path, legacy)
+                return dict(legacy)
+            return {}
+        except (OSError, ValueError) as exc:
+            raise PlaceError(f"The saved places file can't be read ({exc}).", f"Check {path}.") from exc
+    return data if isinstance(data, dict) else {}
+
+
+def _store_places(places: dict[str, Any]) -> None:
+    path = _places_path()
+    if path is None:
+        settings.current().state_set("places", places)
+        return
+    _write_places(path, places)
 
 
 def save_place(name: str, place: Place) -> dict[str, Any]:
-    places = saved_places()
     record = place.public()
     record["kind"] = "saved"
-    places[name.strip().lower()] = record
-    settings.current().state_set("places", places)
+    with _places_lock:
+        places = saved_places()
+        places[name.strip().lower()] = record
+        _store_places(places)
     return record
 
 
 def remove_place(name: str) -> bool:
-    places = saved_places()
-    if places.pop(name.strip().lower(), None) is None:
-        return False
-    settings.current().state_set("places", places)
+    with _places_lock:
+        places = saved_places()
+        if places.pop(name.strip().lower(), None) is None:
+            return False
+        _store_places(places)
     return True
 
 

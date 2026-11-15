@@ -138,14 +138,27 @@ def test_scorecard_collects_once_a_day(card):
     assert json.loads(json.dumps(scorecard._meta("collected_day"))) == "2026-11-15"
 
 
-def test_scorecard_starts_over_when_home_moves(card):
+def test_scorecard_starts_over_only_after_a_confirmed_move(card):
     clock.freeze_for_tests(datetime(2026, 12, 20, 18, 0, tzinfo=UTC))
-    scorecard._meta("home", scorecard._place_key(DSM))
+    scorecard._meta("place", "Des Moines, IA|41.600|-93.610")  # how 0.8.x recorded home
     db = scorecard._db()
     db.execute("INSERT INTO predictions VALUES ('2026-12-10', 1, 'nws', 1, -9, NULL, '2026-12-09')")
     db.execute("INSERT INTO observed VALUES ('2026-12-10', 0, -10, 0, 'test')")
     db.commit()
-    elsewhere = places.Place("Miami, Florida", 25.77, -80.19, country="US", timezone="America/New_York")
-    r = scorecard.report(elsewhere, "us", 30)
-    assert r["ranking"] == [] and scorecard._db().execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 0
-    assert scorecard._meta("home") == scorecard._place_key(elsewhere)
+    assert scorecard._same_home(DSM)
+    elsewhere = places.Place("Kord, IR", 31.0, 50.0, country="IR", timezone="Asia/Tehran")
+
+    def rows():
+        return scorecard._db().execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+
+    r = scorecard.report(elsewhere, "us", 30)  # reading never deletes
+    assert r["ranking"] == [] and "Home changed" in r["notes"][0] and rows() == 1
+    assert scorecard.collect(elsewhere) == 0 and rows() == 1  # one odd lookup: kept
+    http.set_transport_for_tests(httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"daily": {"time": []}}) if "open-meteo" in str(r.url)
+        else httpx.Response(404, json={})))
+    scorecard.collect(DSM)  # home is back to normal: the odd one out is forgotten
+    assert scorecard._meta("home_candidate") is None and rows() == 1
+    assert not scorecard._home_moved(elsewhere)
+    clock.freeze_for_tests(datetime(2026, 12, 21, 1, 0, tzinfo=UTC))  # 7 h later, still elsewhere
+    assert scorecard._home_moved(elsewhere)

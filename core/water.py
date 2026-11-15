@@ -89,7 +89,8 @@ def tides(place: Place, clock: str) -> dict[str, Any] | None:
     if best is None:
         return None
     station = best[1]
-    data = http.get_json(TIDES, {"product": "predictions", "station": station["id"], "date": "today", "range": 48,
+    start = (now_utc() - timedelta(hours=1)).strftime("%Y%m%d %H:00")  # GMT; "date=today" ignores range
+    data = http.get_json(TIDES, {"product": "predictions", "station": station["id"], "begin_date": start, "range": 48,
                                  "datum": "MLLW", "units": "english", "time_zone": "gmt", "interval": "hilo",
                                  "format": "json", "application": "better-weather"},
                          ttl=6 * 3600, max_stale=24 * 3600).data or {}

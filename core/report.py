@@ -523,22 +523,25 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
         found = eu["exact_matches"] + eu["region_name_matches"]
         big = eu["orange_and_red_in_country"]
         notes = []
-        if eu.get("has_shapes"):
+        if eu["exact"]:  # every active warning had a map area, so "none here" is a real answer
             if not found:
                 notes.append(f"No active warning in {eu['country']} covers this exact spot.")
             if big:
                 notes.append(f"{len(big)} orange/red warning(s) elsewhere in {eu['country']}.")
         else:
-            notes.append(f"⚠️ MeteoAlarm names {eu['country']}'s warning areas but has no map of them, so only "
-                         "warnings that name this town or region are shown"
+            notes.append(f"⚠️ MeteoAlarm lists {eu['country']}'s warnings by area name, not map, so only "
+                         "warnings naming this town or area are shown"
                          + (f"; {len(big)} more orange/red elsewhere in the country (weather_alerts lists "
-                            "the regions)" if big else ""))
+                            "the areas)" if big else ""))
         return {"where": place.name, "place": place.public(), "count": len(found),
                 "alerts": [_clean(a) for a in found],
                 "orange_and_red_in_country": [_clean(a) for a in big],
                 "country_counts": eu["country_counts"], "checked": units.clock(fmt.now, fmt.clock),
-                "source": eu["source"], "notes": notes, "_exact": bool(eu.get("has_shapes"))}
-    if not country:
+                "source": eu["source"], "notes": notes, "_exact": bool(eu["exact"])}
+    if country in nws.NWS_COUNTRIES:
+        why = ("⚠️ This spot is outside the National Weather Service's forecast zones (offshore or a remote "
+               "island), so official alerts weren't checked.")
+    elif not country:
         why = ("⚠️ Official alerts weren't checked: these coordinates are outside the US and no country is "
                "known for them. Ask with a place name to check.")
     else:
@@ -574,9 +577,10 @@ def _offset_of_first_alert(data: Any) -> tzinfo:
 
 def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place.note else []
-    point = _nws_point(place, notes)
+    point, known = _nws_lookup(place, notes)
     om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
-    in_spc_area = bool(point) and radar.in_conus(place.lat, place.lon)
+    # SPC is its own service: with the NWS grid lookup down, still try it for a lower-48 spot
+    in_spc_area = (bool(point) or not known) and radar.in_conus(place.lat, place.lon)
     spc_job = _Job("SPC outlook", spc.risk_at, place.lat, place.lon) if in_spc_area else None
     al_job = _Job("NWS alerts", nws.alerts_at, place.lat, place.lon) if point else None
     om = om_job.result(notes)
@@ -594,7 +598,7 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
                 notes.append(f"Day {day['day']} outlook could not be refreshed; showing an older copy")
         result["spc_outlook"] = risk.get("days", [])
         notes.extend(risk.get("notes", []))
-    elif not in_spc_area:
+    elif not in_spc_area and known:
         notes.append("SPC severe outlooks cover the lower 48 US states only")
 
     if al is not None:
@@ -605,7 +609,7 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
             "details": a.get("details"), "instruction": a.get("instruction"),
             "life_threatening": a.get("life_threatening") or None,
         }) for a in storm]
-    elif point:
+    elif point or not known:
         notes.append("⚠️ Watches and warnings could not be checked right now — don't assume there are none")
     else:
         notes.append("⚠️ Official warnings weren't checked here; weather_alerts checks Canada and Europe")

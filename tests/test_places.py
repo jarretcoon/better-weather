@@ -53,3 +53,18 @@ def test_unknown_place_explains_itself(monkeypatch):
     with pytest.raises(places.PlaceError) as err:
         places.resolve("Nowhereville Zzq")
     assert "ZIP" in err.value.hint
+
+
+def test_saved_places_live_in_the_data_folder_and_carry_over(tmp_path):
+    from better_weather.core import settings
+
+    settings.current().state_set("places", {"work": {"name": "Ankeny, Iowa", "lat": 41.73, "lon": -93.6}})
+    settings.set_data_dir(tmp_path)
+    try:
+        assert places.saved_places()["work"]["name"] == "Ankeny, Iowa"  # copied from 0.8.x state
+        assert (tmp_path / "places.json").exists()
+        places.save_place("Mom", places.Place("Ames, Iowa", 42.03, -93.62))
+        assert set(places.saved_places()) == {"work", "mom"} and places.remove_place("work")
+        assert set(places.saved_places()) == {"mom"}
+    finally:
+        settings.set_data_dir(None)

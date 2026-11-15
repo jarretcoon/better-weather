@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 from .. import http, units
@@ -20,10 +22,29 @@ def _q(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
+_failed_points: dict[str, tuple[float, http.FetchError]] = {}
+_failed_lock = threading.Lock()
+FAILED_POINT_S = 120  # one answer may look a point up several times; don't wait out the retries again
+
+
+def forget_failures() -> None:
+    with _failed_lock:
+        _failed_points.clear()
+
+
 def point(lat: float, lon: float) -> dict[str, Any] | None:
     """Grid metadata for a point, or None if the point is outside NWS coverage (cached either way)."""
-    fetched = http.get_json(f"{BASE}/points/{_q(round(lat, 3))},{_q(round(lon, 3))}",
-                            ttl=http.TTL_POINT, max_stale=90 * 24 * 3600, allow_404=True)
+    url = f"{BASE}/points/{_q(round(lat, 3))},{_q(round(lon, 3))}"
+    with _failed_lock:
+        failed = _failed_points.get(url)
+    if failed and time.monotonic() - failed[0] < FAILED_POINT_S:
+        raise failed[1]
+    try:
+        fetched = http.get_json(url, ttl=http.TTL_POINT, max_stale=90 * 24 * 3600, allow_404=True)
+    except http.FetchError as exc:
+        with _failed_lock:
+            _failed_points[url] = (time.monotonic(), exc)
+        raise
     if not fetched.found:
         return None
     props = (fetched.data or {}).get("properties")

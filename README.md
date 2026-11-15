@@ -151,8 +151,8 @@ agent where home is.
   Coordinates are rounded (3 decimals, about 100 m, for the NWS; 2 decimals, about 1 km, for
   Open-Meteo).
 - **Files:** only Hermes' data folder for this plugin (`plugin-data/better-weather/`: response
-  cache, scorecard, pictures kept 24 hours, push state). Home and saved places live in your Hermes
-  config and plugin state. If you set up warning pushes, `push setup` also writes one script,
+  cache, scorecard, saved places, pictures kept 24 hours, push state). Home and units live in your
+  Hermes config. If you set up warning pushes, `push setup` also writes one script,
   `$HERMES_HOME/scripts/better-weather-alerts.py`, because Hermes runs no-agent cron scripts only
   from there.
 - **Background work:** the forecast scorecard checks the home forecast a few times a day (a Hermes
