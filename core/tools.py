@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from . import climate, http, insight, places, report, scorecard, settings, travel, visuals, water
+from . import climate, http, insight, places, report, science, scorecard, settings, travel, visuals, water
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +190,13 @@ def weather_water(args: dict[str, Any]) -> dict[str, Any]:
     return water.water(_place(args), _units(args), settings.current().clock)
 
 
+@safe
+def weather_science(args: dict[str, Any]) -> dict[str, Any]:
+    return science.sounding(_place(args), _units(args), settings.current().clock,
+                            model=str(args.get("model") or "gfs"), hours_ahead=int(args.get("hours_ahead") or 0),
+                            at_peak=bool(args.get("at_peak")))
+
+
 TOOLS: tuple[tuple[str, Handler], ...] = (
     ("weather", weather),
     ("weather_forecast", weather_forecast),
@@ -206,4 +213,5 @@ TOOLS: tuple[tuple[str, Handler], ...] = (
     ("weather_scorecard", weather_scorecard),
     ("weather_travel", weather_travel),
     ("weather_water", weather_water),
+    ("weather_science", weather_science),
 )

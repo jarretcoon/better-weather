@@ -146,7 +146,7 @@ def test_register_wires_everything_and_matches_manifest():
     better_weather.register(ctx)
     assert set(ctx.tools) == {s["name"] for s in schemas.ALL}
     assert "weather" in ctx.commands and "better-weather" in ctx.cli and "weather" in ctx.skills
-    assert len(ctx.tools) == 15 and set(ctx.blueprints) == {"morning-brief", "week-ahead", "weekend-plan"}
+    assert len(ctx.tools) == 16 and set(ctx.blueprints) == {"morning-brief", "week-ahead", "weekend-plan"}
     manifest = (ROOT / "plugin.yaml").read_text(encoding="utf-8")
     block = manifest.split("provides_tools:")[1].split("provides_hooks:")[0]
     declared = set(re.findall(r"-\s+(\w+)", block))

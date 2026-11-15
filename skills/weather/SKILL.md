@@ -10,7 +10,7 @@ metadata:
 
 # Better Weather
 
-Fifteen tools. Start light, go deeper only when asked.
+Sixteen tools. Start light, go deeper only when asked.
 
 | The user asks… | Use |
 |---|---|
@@ -28,6 +28,7 @@ Fifteen tools. Start light, go deeper only when asked.
 | "Which forecast should I trust?", "Who's been right lately?" | `weather_scorecard` |
 | "Flying today?", "Delays at O'Hare?", "Weather when I land in Denver?" | `weather_travel` |
 | "Is the river flooding?", "Tides?", "Waves on the lake?" | `weather_water` |
+| "How unstable is it?", "CAPE?", "Tornado ingredients?", "Show me the sounding numbers" | `weather_science` (`at_peak: true` on storm days) |
 | "Home is Ankeny", "Save my mom's place as Ames" | `weather_places` |
 
 ## Pictures (radar, satellite)

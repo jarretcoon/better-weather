@@ -263,5 +263,24 @@ WATER: dict[str, Any] = {
     "parameters": {"type": "object", "properties": {"location": _LOCATION, "units": _UNITS}, "required": []},
 }
 
+SCIENCE: dict[str, Any] = {
+    "name": "weather_science",
+    "description": (
+        "Storm-science numbers from a model sounding for a place. "
+        "CAPE/CIN (surface, mixed-layer, most-unstable), ECAPE, LCL/LFC/EL, lapse rate, 0-6 km shear, storm "
+        "motion, 0-1/0-3 km helicity, precipitable water, freezing level and the tornado (STP) and supercell "
+        "(SCP) composites, with a plain-language reading. Use for 'how unstable', 'CAPE', 'shear', 'tornado "
+        "ingredients', 'sounding'. Pair with weather_severe for the official outlook."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "location": _LOCATION,
+        "model": {"type": "string", "enum": ["gfs", "hrrr"],
+                  "description": "gfs (worldwide, default) or hrrr (US, higher detail, next 48 h)."},
+        "hours_ahead": {"type": "integer", "minimum": 0, "maximum": 48, "description": "Hours from now (default 0)."},
+        "at_peak": {"type": "boolean",
+                    "description": "Use the hour with the most model CAPE in the next 24 h (good for storm days)."},
+        "units": _UNITS}, "required": []},
+}
+
 ALL = (WEATHER, FORECAST, ALERTS, SEVERE, PLACES, RADAR, SATELLITE, AIR, HISTORY, CONFIDENCE, DISCUSSION,
-       BEST_TIME, SCORECARD, TRAVEL, WATER)
+       BEST_TIME, SCORECARD, TRAVEL, WATER, SCIENCE)
