@@ -34,3 +34,23 @@ def test_live_severe_and_alerts():
 def test_live_doctor():
     result = commands.doctor()
     assert result["ok"], json.dumps(result, indent=1, default=str)
+
+
+def test_live_pictures(tmp_path):
+    settings.set_data_dir(tmp_path)
+    try:
+        settings.current().set("home", "Des Moines, IA")
+        radar = _call("weather_radar")
+        sat = _call("weather_satellite")
+        assert "error" not in radar and radar["media"].startswith("MEDIA:"), radar
+        assert "error" not in sat and sat["media"].startswith("MEDIA:"), sat
+    finally:
+        settings.set_data_dir(None)
+
+
+def test_live_air_and_history():
+    settings.current().set("home", "Des Moines, IA")
+    air = _call("weather_air")
+    assert air.get("air_quality", {}).get("index") is not None, air
+    hist = _call("weather_history", date="2025-07-04")
+    assert hist["days"] and hist["normals_and_records"]["record_high"], hist

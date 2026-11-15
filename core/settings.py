@@ -122,6 +122,10 @@ def data_dir() -> Path | None:
         return None
 
 
-def set_data_dir_for_tests(path: Path | None) -> None:
+def set_data_dir(path: Path | None) -> None:
+    """Pin the data directory (used by the cron script, which runs outside Hermes' plugin loader)."""
     global _data_dir
     _data_dir = path
+
+
+set_data_dir_for_tests = set_data_dir

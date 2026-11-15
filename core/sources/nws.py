@@ -151,10 +151,10 @@ def _kind(event: str) -> int:
     return 4
 
 
-def alerts_at(lat: float, lon: float) -> http.Fetched:
+def alerts_at(lat: float, lon: float, *, ttl: float = http.TTL_ALERTS) -> http.Fetched:
     return http.get_json(f"{BASE}/alerts/active",
                          {"point": f"{_q(round(lat, 3))},{_q(round(lon, 3))}", "status": "actual"},
-                         ttl=http.TTL_ALERTS, max_stale=10 * 60)
+                         ttl=ttl, max_stale=10 * 60)
 
 
 def alerts_in_area(area: str) -> http.Fetched:
@@ -203,7 +203,11 @@ def normalize_alerts(data: Any, *, text_limit: int = 3000) -> list[dict[str, Any
             "issued_by": p.get("senderName"),
             "area": p.get("areaDesc"),
             "starts": p.get("onset") or p.get("effective"),
-            "ends": p.get("ends") or p.get("expires"),
+            # `ends` is None for "until further notice"; `expires` is only when the next update is due.
+            "ends": p.get("ends"),
+            "expires": p.get("expires"),
+            "references": [r.get("identifier") for r in p.get("references") or []
+                           if isinstance(r, dict) and r.get("identifier")],
             "message_type": p.get("messageType"),
             "details": details,
             "description": description[:text_limit] + ("…" if len(description) > text_limit else ""),

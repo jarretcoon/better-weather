@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from . import http, places, report, settings
+from . import climate, http, places, report, settings, visuals
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +121,39 @@ def weather_places(args: dict[str, Any]) -> dict[str, Any]:
     raise places.PlaceError(f"Unknown action '{action}'.", "Use list, save, remove or set_home.")
 
 
+@safe
+def weather_radar(args: dict[str, Any]) -> dict[str, Any]:
+    return visuals.radar(_place(args), view=str(args.get("view") or "local"), loop=bool(args.get("loop")),
+                         clock=settings.current().clock)
+
+
+@safe
+def weather_satellite(args: dict[str, Any]) -> dict[str, Any]:
+    return visuals.satellite(_place(args), kind=str(args.get("kind") or "geocolor"),
+                             loop=bool(args.get("loop")), clock=settings.current().clock)
+
+
+@safe
+def weather_air(args: dict[str, Any]) -> dict[str, Any]:
+    return climate.air(_place(args), settings.current().clock)
+
+
+@safe
+def weather_history(args: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return climate.history(_place(args), args.get("date"), args.get("end_date"), _units(args))
+    except ValueError as exc:
+        raise places.PlaceError(str(exc)) from exc
+
+
 TOOLS: tuple[tuple[str, Handler], ...] = (
     ("weather", weather),
     ("weather_forecast", weather_forecast),
     ("weather_alerts", weather_alerts),
     ("weather_severe", weather_severe),
     ("weather_places", weather_places),
+    ("weather_radar", weather_radar),
+    ("weather_satellite", weather_satellite),
+    ("weather_air", weather_air),
+    ("weather_history", weather_history),
 )

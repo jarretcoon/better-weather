@@ -38,22 +38,29 @@ class Cache:
             self._conn.commit()
 
     def get(self, key: str) -> tuple[int, str, float] | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT status, body, fetched FROM http_cache WHERE key = ?", (key,)
-            ).fetchone()
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT status, body, fetched FROM http_cache WHERE key = ?", (key,)
+                ).fetchone()
+        except sqlite3.Error:  # busy/locked/corrupt: behave like a cache miss, never fail the caller
+            logger.debug("better-weather: cache read failed", exc_info=True)
+            return None
         if row is None:
             return None
         return int(row[0]), str(row[1]), float(row[2])
 
     def put(self, key: str, status: int, body: str, fetched: float | None = None) -> None:
         stamp = time.time() if fetched is None else fetched
-        with self._lock:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO http_cache (key, status, body, fetched) VALUES (?, ?, ?, ?)",
-                (key, status, body, stamp),
-            )
-            self._conn.commit()
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO http_cache (key, status, body, fetched) VALUES (?, ?, ?, ?)",
+                    (key, status, body, stamp),
+                )
+                self._conn.commit()
+        except sqlite3.Error:
+            logger.debug("better-weather: cache write failed", exc_info=True)
 
     def prune(self, older_than: float = MAX_KEEP_SECONDS) -> int:
         cutoff = time.time() - older_than
@@ -89,7 +96,7 @@ def _open_connection() -> sqlite3.Connection:
     directory = settings.data_dir()
     if directory is not None:
         try:
-            return sqlite3.connect(str(directory / "cache.db"), check_same_thread=False)
+            return sqlite3.connect(str(directory / "cache.db"), check_same_thread=False, timeout=5)
         except sqlite3.Error:
             logger.warning("better-weather: could not open cache.db; caching in memory only")
     return sqlite3.connect(":memory:", check_same_thread=False)
@@ -101,7 +108,11 @@ def get_cache() -> Cache:
         return _cache
     with _cache_lock:
         if _cache is None:
-            cache = Cache(_open_connection())
+            try:
+                cache = Cache(_open_connection())
+            except sqlite3.Error:
+                logger.warning("better-weather: cache.db unusable; caching in memory only")
+                cache = Cache(sqlite3.connect(":memory:", check_same_thread=False))
             try:
                 cache.prune()
             except sqlite3.Error:

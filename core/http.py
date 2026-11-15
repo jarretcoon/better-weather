@@ -170,6 +170,20 @@ def get_json(
         raise
 
 
+MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024  # biggest thing we fetch is a ~9 MB satellite loop
+
+
+def download(url: str, params: Mapping[str, Any] | None = None) -> tuple[bytes, dict[str, str]]:
+    """GET raw bytes (images) with the same retries; no caching here (the caller caches files)."""
+    response = _attempt(url, params, {"Accept": "image/*, */*"})
+    if response.status_code != 200:
+        raise FetchError(url, f"HTTP {response.status_code}", response.status_code)
+    content = response.content
+    if len(content) > MAX_DOWNLOAD_BYTES:
+        raise FetchError(url, f"response too large ({len(content)} bytes)")
+    return content, {k.lower(): v for k, v in response.headers.items()}
+
+
 def _problem_detail(response: httpx.Response) -> str:
     try:
         data = response.json()

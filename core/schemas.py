@@ -110,4 +110,79 @@ PLACES: dict[str, Any] = {
     },
 }
 
-ALL = (WEATHER, FORECAST, ALERTS, SEVERE, PLACES)
+RADAR: dict[str, Any] = {
+    "name": "weather_radar",
+    "description": (
+        "Radar picture of rain, snow and storms for a US place. "
+        "Local, regional or national, still or an animated loop, with active warning boxes drawn in. "
+        "Returns a `media` line; put it on its own line in your reply so the chat shows the image."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "location": _LOCATION,
+            "view": {"type": "string", "enum": ["local", "regional", "national"],
+                     "description": "local = the nearest radar (default), regional = several states, "
+                                    "national = lower 48."},
+            "loop": {"type": "boolean", "description": "Animated loop of the last hour (default false)."},
+        },
+        "required": [],
+    },
+}
+
+SATELLITE: dict[str, Any] = {
+    "name": "weather_satellite",
+    "description": (
+        "GOES weather satellite picture for a place in the US and nearby: clouds, storms, smoke, "
+        "still or animated. Returns a `media` line; put it on its own line in your reply so the chat "
+        "shows the image."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "location": _LOCATION,
+            "kind": {"type": "string", "enum": ["geocolor", "infrared", "water_vapor"],
+                     "description": "geocolor = true color by day / infrared at night (default), "
+                                    "infrared = cloud-top temperatures, water_vapor = mid-level moisture."},
+            "loop": {"type": "boolean", "description": "Animated loop (default false)."},
+        },
+        "required": [],
+    },
+}
+
+AIR: dict[str, Any] = {
+    "name": "weather_air",
+    "description": (
+        "Air quality (AQI, smoke/PM2.5, ozone), UV index and, in Europe, pollen for a place, now and "
+        "the worst hour in the next 24. Use for 'is the air ok', 'smoke', 'UV', 'pollen', "
+        "'can I run outside'."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"location": _LOCATION},
+        "required": [],
+    },
+}
+
+HISTORY: dict[str, Any] = {
+    "name": "weather_history",
+    "description": (
+        "Past weather for a place: highs, lows, rain and snow for a day or up to 31 days. "
+        "US places use official station records, with the 1991-2020 normal and the record high and low "
+        "for a single day. Use for 'how cold was it yesterday', 'was last March wet', "
+        "'is this warmer than normal', 'record high today'."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "location": _LOCATION,
+            "date": {"type": "string",
+                     "description": "YYYY-MM-DD, 'today', 'yesterday' or 'N days ago' (default today)."},
+            "end_date": {"type": "string", "description": "Optional end of a range, same formats."},
+            "units": _UNITS,
+        },
+        "required": [],
+    },
+}
+
+ALL = (WEATHER, FORECAST, ALERTS, SEVERE, PLACES, RADAR, SATELLITE, AIR, HISTORY)

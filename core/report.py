@@ -466,8 +466,10 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     items = nws.normalize_alerts(fetched.data)
     for item in items:
         item["starts"] = fmt.at(item.get("starts"))
-        item["ends"] = fmt.at(item.get("ends"))
+        item["ends"] = fmt.at(item.get("ends"))  # None = no set end ("until further notice")
+        item["next_update_by"] = fmt.at(item.pop("expires", None))
         item.pop("id", None)
+        item.pop("references", None)
     result = {
         "where": label,
         "place": place.public() if place else None,
