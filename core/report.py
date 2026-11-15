@@ -12,7 +12,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, TypeVar
 
-from . import http, units
+from . import display, http, units
 from .clock import now_utc
 from .places import Place
 from .sources import intl_alerts, nws, openmeteo, spc
@@ -126,6 +126,7 @@ def _om_hours(om: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict[str, 
 
         out.append({
             "time": units.day_clock(dt, fmt.clock, fmt.now),
+            "_day": 7 <= dt.hour < 18,
             "temp": units.temp_value(pick("temperature_2m"), fmt.units),
             "feels_like": units.temp_value(pick("apparent_temperature"), fmt.units),
             "sky": openmeteo.describe(pick("weather_code")),
@@ -149,6 +150,7 @@ def _nws_hours(fetched: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict
         start = units.parse_time(p.get("startTime"))
         out.append({
             "time": fmt.at(start),
+            "_day": bool(p.get("isDaytime")),
             "temp": p.get("temperature"),
             "sky": p.get("shortForecast"),
             "precip_chance_pct": (p.get("probabilityOfPrecipitation") or {}).get("value") or 0,
@@ -359,8 +361,14 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         "sources": sources,
         "notes": notes,
     }
+    is_day = om_current.get("is_day")
+    if is_day is not None:
+        result["_daylight"] = bool(is_day)
+    elif sun:
+        result["_daylight"] = None
     result["summary"] = now_text(result)
-    return _clean(result)
+    result["card"] = display.now_card(result)
+    return display.strip_private(_clean(result))
 
 
 def now_text(r: dict[str, Any]) -> str:
@@ -448,7 +456,8 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
         notes.append("⚠️ No forecast source answered; try again in a minute")
     result["sources"] = sources
     result["notes"] = notes
-    return _clean(result)
+    result["card"] = display.forecast_card(result)
+    return display.strip_private(_clean(result))
 
 
 # --- alerts -----------------------------------------------------------------------------------
@@ -493,6 +502,7 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     }
     if not items:
         result["summary"] = f"No active NWS alerts for {label}."
+    result["card"] = display.alerts_card(result)
     return _clean(result) | {"count": len(items), "alerts": result["alerts"]}
 
 

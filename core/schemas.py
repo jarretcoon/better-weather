@@ -23,8 +23,8 @@ WEATHER: dict[str, Any] = {
     "description": (
         "Current weather, the next hours, today's forecast and active alerts for a place. "
         "Use this FIRST for any 'how's the weather', 'is it raining', 'do I need a jacket' question; "
-        "it needs no arguments for the user's home. Answers include the source and time — mention them, "
-        "and never leave out an alert."
+        "it needs no arguments for the user's home. Reply with the returned `card` as-is (it's formatted "
+        "for chat), plus one short line if useful; never leave out an alert."
     ),
     "parameters": {
         "type": "object",
@@ -38,7 +38,8 @@ FORECAST: dict[str, Any] = {
     "description": (
         "Hourly or daily weather forecast for a place, up to 16 days ahead. "
         "Use for 'this weekend', 'next week', 'hour by hour', 'when will the rain start'. "
-        "US places use the official NWS forecast (with forecaster wording) and Open-Meteo past day 7."
+        "US places use the official NWS forecast (with forecaster wording) and Open-Meteo past day 7. "
+        "Reply with the returned `card` as-is."
     ),
     "parameters": {
         "type": "object",

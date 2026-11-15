@@ -1,7 +1,7 @@
 ---
 name: weather
 description: How to answer weather questions with Better Weather — which tool to use, how to show radar and satellite pictures, how to talk about alerts safely, and how to set up warning pushes.
-version: 0.3.0
+version: 0.4.0
 metadata:
   hermes:
     tags: [weather, forecast, alerts, severe-weather, radar, satellite]
@@ -70,6 +70,26 @@ Scheduled briefs with the AI (morning brief, week ahead, weekend) are blueprints
   model runs show rain" rather than a flat yes or no, and give highs as a range when confidence is low.
 - The scorecard needs about two weeks of daily checks before it names a most-accurate source. Until
   then, say it's still learning.
+
+## Show the card
+`weather`, `weather_forecast` and `weather_alerts` return a `card`: a short, emoji-formatted block
+made for chat (Telegram, Desktop, terminal). **Send the card as-is** as your answer, then add at most
+one short line of your own if it helps (advice, "rain starts around 3 PM", a caveat from `notes`).
+Don't rewrite it into paragraphs or a table, and don't repeat what it already says. If the user asked
+something specific ("do I need a jacket?"), answer that in one line first, then the card.
+
+## If asked what Better Weather can do
+Answer from this list; don't read the plugin's files to find out.
+- Now, hourly (72 h) and daily (16 days) forecasts for any place; home is the default
+- Official alerts (US, Canada; Europe via MeteoAlarm) and severe-storm risk at the exact spot
+- Radar and satellite pictures, still or animated
+- Air quality/smoke/UV (pollen in Europe), past weather with normals and records
+- Forecast confidence (82 model runs), the NWS forecasters' discussion, which forecast has been most
+  accurate at home (scorecard)
+- Best time to walk/run/bike/golf/mow/grill/wash the car/stargaze; travel (airports, delays, weather
+  on arrival); rivers, tides and waves; storm science (CAPE, shear, ECAPE)
+- `/weather` commands that answer without the AI, zero-token warning pushes (plus freeze and
+  rain-soon heads-ups), and scheduled briefs (`/blueprint better-weather:morning-brief`)
 
 ## Answer style
 - Lead with what matters: temperature and sky now, then what's coming, then alerts.
