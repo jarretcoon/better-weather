@@ -30,7 +30,7 @@ def test_weather_now_us_uses_station_report(home):
 def test_weather_now_abroad_uses_open_meteo_and_says_no_alerts(home):
     r = call("weather", location="Tokyo")
     assert r["current"]["source"] == "Open-Meteo model estimate"
-    assert any("only checked for US" in n for n in r["notes"])
+    assert any("US, Canada and 38 European countries" in n for n in r["notes"])
 
 
 def test_metric_override(home):
