@@ -238,6 +238,10 @@ def _freeze(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str, 
         return None
     last = state.get("last_freeze_night")
     state["last_freeze_night"] = today.isoformat()
+    recent = [r for r in rows if now - timedelta(days=FREEZE_QUIET_NIGHTS) <= r["dt"] <= now - timedelta(hours=3)]
+    limit = 0.0 if threshold is None else threshold
+    if any((units.num(r.get("temperature_2m")) or 99) <= limit for r in recent):
+        return None  # it already froze in the last few nights (works even with no saved history)
     if last:
         try:
             if (today - date.fromisoformat(str(last))).days <= FREEZE_QUIET_NIGHTS:
@@ -276,7 +280,7 @@ def _extras(config: dict[str, Any], state: dict[str, Any], lat: float, lon: floa
     if not (config.get("freeze") or config.get("rain")):
         return []
     try:
-        data = openmeteo.forecast(lat, lon, 2).data or {}
+        data = openmeteo.forecast(lat, lon, 2, past_days=FREEZE_QUIET_NIGHTS).data or {}
     except http.FetchError:
         return []
     rows = _rows(data.get("hourly") or {}, now)

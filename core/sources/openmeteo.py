@@ -28,7 +28,7 @@ def _round(value: float, places: int = 2) -> float:
     return round(float(value), places)
 
 
-def forecast(lat: float, lon: float, days: int = 7) -> http.Fetched:
+def forecast(lat: float, lon: float, days: int = 7, past_days: int = 0) -> http.Fetched:
     """Current, hourly and daily data. Always fetched in metric (°C, km/h, mm) and converted
     for display, so one cached copy serves both unit settings."""
     params = {
@@ -41,6 +41,8 @@ def forecast(lat: float, lon: float, days: int = 7) -> http.Fetched:
         "forecast_days": max(1, min(int(days), 16)),
         "wind_speed_unit": "kmh",
     }
+    if past_days:
+        params["past_days"] = max(0, min(int(past_days), 92))
     return http.get_json(FORECAST_URL, params, ttl=http.TTL_MODEL, max_stale=12 * 3600)
 
 
