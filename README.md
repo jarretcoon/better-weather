@@ -43,7 +43,7 @@ of one. Quiet checks send nothing and use no model at all.
 
 ```bash
 hermes better-weather push setup                 # home, warnings + watches
-hermes better-weather push setup --freeze --rain # plus freeze and rain-soon heads-ups
+hermes better-weather push setup --freeze --rain # plus first-freeze and rain/snow-soon heads-ups
 hermes cron create "every 2m" --no-agent --script better-weather-alerts.py --deliver telegram --name better-weather-alerts
 hermes better-weather push check                 # what a run would send right now (sends nothing)
 hermes better-weather push off                   # pause (push on resumes)
@@ -51,7 +51,10 @@ hermes better-weather push off                   # pause (push on resumes)
 
 It keys each alert on the NWS event id, so routine updates stay quiet; cancellations and upgrades
 end the old alert right away, and an alert must be missing from two checks in a row before it is
-called ended. If the alert service is unreachable for about 20 minutes it tells you once, and again
+called ended. The freeze heads-up comes at 3 PM, only for the first freezing night after a milder stretch (not
+every night of winter). The rain/snow heads-up comes only when it's dry now and rain or snow is
+likely within the hour, between 7 AM and 10 PM, at most every 3 hours. If the alert service is
+unreachable for about 20 minutes it tells you once, and again
 when it's back. Scheduled AI briefs are blueprints: `/blueprint better-weather:morning-brief`,
 `better-weather:week-ahead`, `better-weather:weekend-plan`.
 

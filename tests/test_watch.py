@@ -1,5 +1,7 @@
+from datetime import datetime, timedelta, timezone
+
 import httpx
-from better_weather.core import http, watch
+from better_weather.core import cache, clock, http, watch
 
 CONFIG = {"name": "Des Moines, IA", "lat": 41.6, "lon": -93.61, "timezone": "America/Chicago",
           "level": "watches", "clock": "12h"}
@@ -160,3 +162,79 @@ def test_paused_pushes_stay_silent(tmp_path):
     watch._save(tmp_path / watch.CONFIG_NAME, {**CONFIG, "paused": True})
     http.set_transport_for_tests(_serve([_feature("a1", "Tornado Warning")]))
     assert watch.run(tmp_path) == ""
+
+
+# --- freeze and rain/snow heads-ups ---------------------------------------------------------------
+
+def _model(start_local, temps, *, chance=0, precip=0.0, snow=0.0, current_precip=0.0, current_code=0):
+    """Open-Meteo-shaped forecast: hourly rows from start_local (naive local ISO), one per temp."""
+    base = datetime.fromisoformat(start_local)
+    times = [(base + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M") for i in range(len(temps))]
+    n = len(temps)
+    return {"current": {"precipitation": current_precip, "weather_code": current_code},
+            "hourly": {"time": times, "temperature_2m": temps, "precipitation_probability": [chance] * n,
+                       "precipitation": [precip] * n, "snowfall": [snow] * n},
+            "daily": {"time": []}}
+
+
+def _at(local_iso):
+    """Freeze the clock at a Des Moines local time (CST, UTC-6)."""
+    clock.freeze_for_tests(datetime.fromisoformat(local_iso).replace(tzinfo=timezone(timedelta(hours=-6))))
+
+
+def _serve_model(payload):
+    cache.use_memory_cache_for_tests()  # each scenario is a different forecast; skip the 15-min cache
+    def handler(request):
+        if "open-meteo" in str(request.url):
+            return httpx.Response(200, json=payload)
+        return httpx.Response(200, json={"features": []})
+    return httpx.MockTransport(handler)
+
+
+FREEZE = {**CONFIG, "freeze": True}
+RAIN = {**CONFIG, "rain": True}
+
+
+def test_first_freeze_after_a_mild_stretch_only():
+    _at("2026-10-20T15:05")
+    http.set_transport_for_tests(_serve_model(_model("2026-10-20T15:00", [5.0] * 10 + [-2.0] * 8 + [3.0] * 3)))
+    message, state = watch.check(FREEZE, {})
+    assert message.startswith("🥶 First freeze in a while tonight in Des Moines, IA: low near 28°F around 1 AM")
+    assert watch.check(FREEZE, state)[0] == ""  # once a day
+    _at("2026-10-21T15:05")  # the next night freezes too: same cold spell, stay quiet
+    http.set_transport_for_tests(_serve_model(_model("2026-10-21T15:00", [-1.0] * 20)))
+    message, state = watch.check(FREEZE, state)
+    assert message == ""
+    _at("2026-10-26T15:05")  # five nights later, after a mild stretch: worth saying again
+    http.set_transport_for_tests(_serve_model(_model("2026-10-26T15:00", [-3.0] * 20)))
+    assert watch.check(FREEZE, state)[0].startswith("🥶")
+
+
+def test_no_freeze_check_before_mid_afternoon():
+    _at("2026-10-20T09:00")
+    http.set_transport_for_tests(_serve_model(_model("2026-10-20T09:00", [-5.0] * 24)))
+    message, state = watch.check(FREEZE, {})
+    assert message == "" and "freeze_day" not in state
+
+
+def test_rain_soon_only_when_dry_now_and_awake_hours():
+    _at("2026-10-20T13:20")
+    http.set_transport_for_tests(_serve_model(_model("2026-10-20T13:00", [12.0] * 4, chance=80, precip=1.5)))
+    message, state = watch.check(RAIN, {})
+    assert message == "☔ Rain likely to start in Des Moines, IA within the hour."
+    assert watch.check(RAIN, state)[0] == ""  # not again within 3 hours
+    # already raining: nothing "starting"
+    http.set_transport_for_tests(_serve_model(_model("2026-10-20T13:00", [12.0] * 4, chance=80, precip=1.5,
+                                                     current_precip=0.8, current_code=63)))
+    assert watch.check(RAIN, {})[0] == ""
+    # 2 AM: quiet hours
+    _at("2026-10-21T02:20")
+    http.set_transport_for_tests(_serve_model(_model("2026-10-21T02:00", [12.0] * 4, chance=80, precip=1.5)))
+    assert watch.check(RAIN, {})[0] == ""
+
+
+def test_snow_is_called_snow():
+    _at("2026-12-20T13:20")
+    http.set_transport_for_tests(_serve_model(_model("2026-12-20T13:00", [-4.0] * 4, chance=90, precip=0.6,
+                                                     snow=0.5)))
+    assert watch.check(RAIN, {})[0] == "🌨️ Snow likely to start in Des Moines, IA within the hour."
