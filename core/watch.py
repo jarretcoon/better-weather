@@ -8,8 +8,9 @@ What gets pushed (``level`` in watch.json):
   warnings  new warnings (tornado, severe thunderstorm, flash flood, winter storm, …) and their end
   watches   the above plus watches (default)
   all       the above plus advisories and statements
-Optional extras (off unless enabled): ``freeze`` (a heads-up at 3 PM when tonight drops to 32°F or
-below) and ``rain`` (a heads-up when rain is likely to start within the hour).
+Optional extras (off unless enabled): ``freeze`` (at 3 PM, a heads-up for the first freezing night
+after a milder stretch, not every night of winter) and ``rain`` (rain or snow likely to start within
+the hour while it's dry now; 7 AM-10 PM only, at most every 3 hours).
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import logging
 import os
 import re
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -201,6 +202,76 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
     return "\n\n".join(messages), state
 
 
+FREEZE_CHECK_HOUR = 15            # look at tonight's low once a day, mid-afternoon
+FREEZE_QUIET_NIGHTS = 3          # only the first freezing night after this many milder nights
+RAIN_HOURS = (7, 22)             # rain/snow heads-ups only between 7 AM and 10 PM local
+RAIN_GAP_SECONDS = 3 * 3600      # at most one rain/snow heads-up every 3 hours
+_WET_CODES = set(range(51, 68)) | set(range(71, 87)) | {95, 96, 99}
+
+
+def _rows(hourly: dict[str, Any], now: Any) -> list[dict[str, Any]]:
+    out = []
+    times = hourly.get("time") or []
+    for i, stamp in enumerate(times):
+        dt = units.parse_time(stamp)
+        if dt is None:
+            continue
+        row = {k: (v[i] if i < len(v) else None) for k, v in hourly.items() if isinstance(v, list)}
+        row["dt"] = dt.replace(tzinfo=now.tzinfo)
+        out.append(row)
+    return out
+
+
+def _freeze(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str, Any]], now: Any) -> str | None:
+    today = now.date()
+    if now.hour < FREEZE_CHECK_HOUR or state.get("freeze_day") == today.isoformat():
+        return None
+    state["freeze_day"] = today.isoformat()
+    night_end = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    night = [r for r in rows if now <= r["dt"] <= night_end and units.num(r.get("temperature_2m")) is not None]
+    if not night:
+        return None
+    coldest = min(night, key=lambda r: units.num(r["temperature_2m"]) or 0)
+    low = units.num(coldest["temperature_2m"]) or 0
+    threshold = units.num(config.get("freeze_at_c"))
+    if low > (0.0 if threshold is None else threshold):
+        return None
+    last = state.get("last_freeze_night")
+    state["last_freeze_night"] = today.isoformat()
+    if last:
+        try:
+            if (today - date.fromisoformat(str(last))).days <= FREEZE_QUIET_NIGHTS:
+                return None  # still in a cold spell: it already knows
+        except ValueError:
+            pass
+    shown = units.temp(low, "metric" if config.get("units") == "metric" else "us")
+    when = units.clock(coldest["dt"], config.get("clock") or "12h")
+    return (f"🥶 First freeze in a while tonight in {config.get('name') or 'home'}: low near {shown} around "
+            f"{when}. Cover plants, bring pets in, and unhook garden hoses.")
+
+
+def _rain_soon(config: dict[str, Any], state: dict[str, Any], data: dict[str, Any], rows: list[dict[str, Any]],
+               now: Any) -> str | None:
+    if not (RAIN_HOURS[0] <= now.hour < RAIN_HOURS[1]):
+        return None
+    current = data.get("current") or {}
+    if (units.num(current.get("precipitation")) or 0) >= 0.1 or units.num(current.get("weather_code")) in _WET_CODES:
+        state["rain_at"] = time.time()  # already wet: no "starting soon", and no repeat right after it stops
+        return None
+    if time.time() - float(state.get("rain_at") or 0) < RAIN_GAP_SECONDS:
+        return None
+    for row in rows:
+        if not (now <= row["dt"] <= now + timedelta(minutes=75)):
+            continue
+        likely = (units.num(row.get("precipitation_probability")) or 0) >= 60
+        if likely and (units.num(row.get("precipitation")) or 0) >= 0.2:
+            state["rain_at"] = time.time()
+            snowy = (units.num(row.get("snowfall")) or 0) > 0 or (units.num(row.get("temperature_2m")) or 5) <= 0.5
+            kind = "🌨️ Snow" if snowy else "☔ Rain"
+            return f"{kind} likely to start in {config.get('name') or 'home'} within the hour."
+    return None
+
+
 def _extras(config: dict[str, Any], state: dict[str, Any], lat: float, lon: float, now: Any) -> list[str]:
     if not (config.get("freeze") or config.get("rain")):
         return []
@@ -208,39 +279,13 @@ def _extras(config: dict[str, Any], state: dict[str, Any], lat: float, lon: floa
         data = openmeteo.forecast(lat, lon, 2).data or {}
     except http.FetchError:
         return []
-    out: list[str] = []
-    place = str(config.get("name") or "home")
-    us = (config.get("units") or "us") == "us"
-    if config.get("freeze") and now.hour >= 15 and state.get("freeze_day") != now.date().isoformat():
-        daily = data.get("daily") or {}
-        lows = daily.get("temperature_2m_min") or []
-        tonight = units.num(lows[1]) if len(lows) > 1 else None  # tomorrow morning's low
-        threshold = units.num(config.get("freeze_at_c"))
-        threshold = 0.0 if threshold is None else threshold
-        if tonight is not None and tonight <= threshold:
-            low = units.temp(tonight, "us" if us else "metric")
-            out.append(f"🥶 Freeze tonight in {place}: low near {low}. Cover plants, bring pets in, "
-                       "and drip faucets if it gets much colder.")
-        state["freeze_day"] = now.date().isoformat()
+    rows = _rows(data.get("hourly") or {}, now)
+    out = []
+    if config.get("freeze"):
+        out.append(_freeze(config, state, rows, now))
     if config.get("rain"):
-        hourly = data.get("hourly") or {}
-        times, chance = hourly.get("time") or [], hourly.get("precipitation_probability") or []
-        amount = hourly.get("precipitation") or []
-        tz = now.tzinfo
-        soon = False
-        for stamp, p, mm in zip(times, chance, amount, strict=False):
-            dt = units.parse_time(stamp)
-            if dt is None:
-                continue
-            dt = dt.replace(tzinfo=tz)
-            if now <= dt <= now + timedelta(minutes=75) and (units.num(p) or 0) >= 60 and (units.num(mm) or 0) >= 0.2:
-                soon = True
-                break
-        last = float(state.get("rain_at") or 0)
-        if soon and time.time() - last > 3 * 3600:
-            out.append(f"☔ Rain likely to start in {place} within the hour.")
-            state["rain_at"] = time.time()
-    return out
+        out.append(_rain_soon(config, state, data, rows, now))
+    return [m for m in out if m]
 
 
 def _rate_limited(state: dict[str, Any], key: str, hours: float) -> bool:
