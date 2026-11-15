@@ -24,7 +24,7 @@ def test_weather_now_us_uses_station_report(home):
     assert r["current"]["source"] == "NWS station report" and r["current"]["temp"].endswith("°F")
     assert r["next_hours"] and r["forecast"]
     assert "NWS alerts" in r["sources"]
-    assert r["summary"].startswith("Des Moines, IA")
+    assert r["card"].startswith("**Des Moines, IA**") and list(r)[:2] == ["card", "how_to_reply"]
 
 
 def test_weather_now_abroad_uses_open_meteo_and_says_no_alerts(home):
@@ -51,7 +51,7 @@ def test_nws_outage_falls_back_and_warns_about_alerts(home):
     assert r["current"]["source"] == "Open-Meteo model estimate"
     assert r["next_hours"] and r["forecast"]
     assert any("Alerts could not be checked" in n for n in r["notes"])
-    assert "⚠️ Alerts could not be checked" in r["summary"]
+    assert "⚠️ Alerts could not be checked" in r["card"]
 
 
 def test_forecast_daily_extends_past_day_seven(home):

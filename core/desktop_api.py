@@ -35,7 +35,7 @@ def now_payload(force: bool = False) -> dict[str, Any]:
         "as_of": r.get("as_of"),
         "alerts": [a["event"] for a in alerts],
         "life_threatening": any(a.get("life_threatening") for a in alerts),
-        "summary": r.get("summary"),
+        "summary": str(r.get("card") or "").replace("**", ""),
     }
     with _lock:
         _cached = (time.time(), payload)

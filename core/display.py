@@ -181,3 +181,13 @@ def alerts_card(r: dict[str, Any]) -> str:
         if a.get("life_threatening") and a.get("instruction"):
             lines.append(f"   👉 {str(a['instruction'])[:280]}")
     return "\n".join(lines)
+
+
+REPLY_HINT = ("Send `card` to the user exactly as written; it is already formatted for chat. "
+              "Add at most one short line of your own.")
+
+
+def card_first(result: dict[str, Any], card: str) -> dict[str, Any]:
+    """Put the card (and how to use it) first, where the model reads it before the raw data."""
+    rest = {k: v for k, v in result.items() if k not in ("card", "how_to_reply")}
+    return {"card": card, "how_to_reply": REPLY_HINT, **rest}
