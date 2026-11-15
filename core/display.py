@@ -78,6 +78,12 @@ def now_card(r: dict[str, Any]) -> str:
             bits.append(f"💧 {c['humidity_pct']}%")
         if bits:
             lines.append(" · ".join(bits))
+    hours = (r.get("_next_hours") or [])[1::2][:4]
+    if hours:
+        lines.append("⏱️ " + " · ".join(
+            f"{h.get('time')} {icon(h.get('sky'), h.get('_day', True))} {_deg(h.get('temp'))}"
+            + (f" 💧{round(h['precip_chance_pct'])}%" if (h.get("precip_chance_pct") or 0) >= 20 else "")
+            for h in hours))
     periods = (r.get("forecast") or [])[:2]
     if periods:
         lines.append("")
@@ -90,12 +96,16 @@ def now_card(r: dict[str, Any]) -> str:
                 lines.append(f"**{p.get('day')}** {icon(p.get('sky'))} {_deg(p.get('high'))} / {_deg(p.get('low'))} · "
                              f"{p.get('sky')}{_chance(p.get('precip_chance_pct'))}")
     alerts = r.get("alerts") or []
+    warnings = [n for n in r.get("notes") or [] if n.startswith("⚠️")]
     lines.append("")
-    lines.extend(_alert_lines(alerts) if alerts else ["✅ No alerts"])
-    for note in r.get("notes") or []:
-        if note.startswith("⚠️"):
-            lines.append(note)
-    sun = r.get("sun") or {}
+    if alerts:
+        lines.extend(_alert_lines(alerts))
+    elif r.get("_alerts_checked", True):
+        lines.append("✅ No alerts")
+    elif not warnings:
+        warnings = ["⚠️ Alerts weren't checked here"]
+    lines.extend(warnings)
+    sun = r.get("_sun") or r.get("sun") or {}
     if sun.get("sunrise") and sun.get("sunset"):
         lines.append(f"🌅 {sun['sunrise']} · 🌇 {sun['sunset']}")
     return "\n".join(lines).strip()
@@ -115,7 +125,7 @@ def _daily_from_periods(periods: list[dict[str, Any]]) -> list[str]:
             continue
         night = periods[i + 1] if i + 1 < len(periods) and periods[i + 1].get("high_or_low") == "low" else None
         name = str(p.get("name") or "")
-        short = name if name in {"Today", "This Afternoon"} else name[:3]
+        short = name if name in {"Today", "This Afternoon"} else (p.get("_dow") or name[:3])
         pop = max((q.get("precip_chance_pct") or 0) for q in (p, night) if q)
         low = _deg(night.get("temp") if night else None)
         lines.append(f"**{short}** {icon(p.get('sky'))} {_deg(p.get('temp'))} / {low} · {p.get('sky')}{_chance(pop)}")
@@ -170,17 +180,30 @@ def strip_private(value: Any) -> Any:
 
 def alerts_card(r: dict[str, Any]) -> str:
     alerts = r.get("alerts") or []
+    where = r.get("where") or (r.get("place") or {}).get("name") or "this place"
+    warnings = [n for n in r.get("notes") or [] if n.startswith("⚠️")]
     if not alerts:
-        return f"✅ No active alerts for {r.get('where') or r.get('place', {}).get('name', 'this place')}"
-    lines = [f"**Alerts · {r.get('where')}**"]
+        if r.get("_exact", True):
+            return "\n".join([f"✅ No active alerts for {where}", *warnings])
+        return "\n".join([f"**Alerts · {where}**", *(warnings or ["⚠️ Alerts weren't checked here"])])
+    lines = [f"**Alerts · {where}**"]
     for a in alerts[:5]:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
         lines.append(f"{mark} **{a['event']}**" + (f" until {a['ends']}" if a.get("ends") else ""))
-        if a.get("headline"):
+        if a.get("headline") and str(a["headline"]).strip().lower() != str(a.get("event")).strip().lower():
             lines.append(f"   {a['headline']}")
         if a.get("life_threatening") and a.get("instruction"):
-            lines.append(f"   👉 {str(a['instruction'])[:280]}")
+            lines.append(f"   👉 {_flat(a['instruction'], 280)}")
+    if len(alerts) > 5:
+        lines.append(f"…and {len(alerts) - 5} more")
+    lines.extend(warnings)
     return "\n".join(lines)
+
+
+def _flat(text: Any, limit: int) -> str:
+    """NWS text comes hard-wrapped at ~70 columns; join it and cut at a word."""
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[:limit].rsplit(" ", 1)[0] + "…"
 
 
 REPLY_HINT = ("Send `card` to the user exactly as written; it is already formatted for chat. "

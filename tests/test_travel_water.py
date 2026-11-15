@@ -68,15 +68,15 @@ def test_tides_pick_the_nearest_station_and_waves_skip_inland():
     clock.freeze_for_tests(datetime(2026, 11, 15, 12, 0, tzinfo=UTC))
     stations = {"stations": [{"id": "1", "name": "Far", "lat": 33.5, "lng": -79.0},
                              {"id": "2", "name": "Near", "lat": 32.78, "lng": -79.92}]}
-    preds = {"predictions": [{"t": "2026-11-15 09:00", "v": "5.6", "type": "H"},
-                             {"t": "2026-11-15 15:10", "v": "0.2", "type": "L"}]}
+    preds = {"predictions": [{"t": "2026-11-15 14:00", "v": "5.6", "type": "H"},  # GMT = 9 AM EST
+                             {"t": "2026-11-15 20:10", "v": "0.2", "type": "L"}]}
 
     def handler(request):
         url = str(request.url)
         if "stations.json" in url:
             return httpx.Response(200, json=stations)
         if "datagetter" in url:
-            assert "station=2" in url
+            assert "station=2" in url and "time_zone=gmt" in url
             return httpx.Response(200, json=preds)
         return httpx.Response(200, json={"current": {"wave_height": None}})
 

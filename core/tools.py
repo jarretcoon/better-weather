@@ -58,7 +58,10 @@ def _place(args: dict[str, Any]) -> places.Place:
 
 @safe
 def weather(args: dict[str, Any]) -> dict[str, Any]:
-    return report.now(_place(args), _units(args), settings.current().clock)
+    result = report.now(_place(args), _units(args), settings.current().clock)
+    if scorecard.RUN_ON_USE:
+        scorecard.update_in_background()
+    return result
 
 
 @safe

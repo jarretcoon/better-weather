@@ -7,6 +7,7 @@ import json
 import os
 import time
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -81,9 +82,9 @@ def run(raw_args: str) -> str:
         if sub == "air":
             return _air_text(climate.air(places.resolve(rest), s.clock))
         if sub == "history":
-            day, _, where = rest.partition(" ")
+            day, where = _split_day(rest)
             try:
-                r = climate.history(places.resolve(where), day or "yesterday", None, s.units)
+                r = climate.history(places.resolve(where), day, None, s.units)
             except ValueError as exc:
                 return str(exc)
             return _history_text(r)
@@ -111,6 +112,20 @@ def _air_text(r: dict[str, Any]) -> str:
         lines.append(f"Pollen: {active or 'none'}")
     lines.extend(n for n in r.get("notes") or [] if "smoke" in n)
     return "\n".join(lines)
+
+
+def _split_day(rest: str) -> tuple[str, str]:
+    """'2026-11-01 Des Moines' / '3 days ago Ames' / 'Des Moines' -> (day, place); day defaults to yesterday."""
+    words = rest.split()
+    for n in (3, 1):  # "N days ago", then one word
+        head = " ".join(words[:n])
+        try:
+            climate.parse_day(head, date.today())
+        except ValueError:
+            continue
+        if head:
+            return head, " ".join(words[n:])
+    return "yesterday", rest
 
 
 def _history_text(r: dict[str, Any]) -> str:

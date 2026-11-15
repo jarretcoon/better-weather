@@ -1,7 +1,7 @@
 ---
 name: weather
-description: How to answer weather questions with Better Weather — which tool to use, how to show radar and satellite pictures, how to talk about alerts safely, and how to set up warning pushes.
-version: 0.4.0
+description: How to answer weather questions with Better Weather — which tool to use, how to send its chat cards and radar/satellite pictures, how to talk about alerts safely, and how to set up warning pushes.
+version: 0.5.0
 metadata:
   hermes:
     tags: [weather, forecast, alerts, severe-weather, radar, satellite]
@@ -10,95 +10,74 @@ metadata:
 
 # Better Weather
 
-Sixteen tools. Start light, go deeper only when asked.
+## Send the card
+`weather`, `weather_forecast` and `weather_alerts` return a `card`: a short emoji block made for chat.
+**Send it as-is**, then at most one line of your own (advice, a caveat from `notes`). If the user asked
+something specific ("jacket?"), answer that in one line first, then the card. Don't rewrite it into
+paragraphs or a table, and don't repeat what it says.
 
+## Which tool
 | The user asks… | Use |
 |---|---|
-| "How's the weather?", "Is it raining?", "Jacket?" | `weather` (no arguments = home) |
-| "This weekend?", "Next week?", "Hour by hour?", "When does the rain start?" | `weather_forecast` (`hourly: true` for hours) |
-| "Any warnings?", details of an alert `weather` mentioned | `weather_alerts` |
-| "Storms coming?", "Tornado risk?", "Severe weather today?" | `weather_severe` |
-| "Show me the radar", "Is that storm close?" | `weather_radar` (`loop: true` for motion) |
-| "Show me the clouds / satellite / smoke from above" | `weather_satellite` |
-| "Is the air OK?", "Smoke?", "UV?", "Pollen?" | `weather_air` |
-| "How cold was it yesterday?", "Normal for today?", "Record high?" | `weather_history` |
-| "How sure are they?", "Will it really snow?", "How much rain could we get?" | `weather_confidence` |
-| "Why?", "What are the forecasters thinking?" | `weather_discussion` (summarize it plainly) |
-| "When should I run / mow / grill / wash the car?", "Good night for stars?" | `weather_best_time` |
-| "Which forecast should I trust?", "Who's been right lately?" | `weather_scorecard` |
-| "Flying today?", "Delays at O'Hare?", "Weather when I land in Denver?" | `weather_travel` |
-| "Is the river flooding?", "Tides?", "Waves on the lake?" | `weather_water` |
-| "How unstable is it?", "CAPE?", "Tornado ingredients?", "Show me the sounding numbers" | `weather_science` (`at_peak: true` on storm days) |
-| "Home is Ankeny", "Save my mom's place as Ames" | `weather_places` |
-
-## Pictures (radar, satellite)
-- The result has a `media` field like `MEDIA:/…/radar-KDMX-0.gif`. Put that exact line on its own
-  line in your reply, not in a code block. The chat turns it into the picture.
-- Say what the picture is (source and time) in one short line. Don't describe pixels you can't see.
-- For a storm the user is worried about, offer `loop: true` (shows motion) and `weather_severe`.
-- Radar is US-only. Satellite covers the US and nearby. Say so if asked about elsewhere.
-
-## Places
-- No location means home. If the tool says no home is set, ask the user where home is and call
-  `weather_places` with `action: "set_home"`. Don't guess their town.
-- Place names work best as "City, ST" in the US or "City, Country" elsewhere. ZIP codes, airport
-  codes (KDSM) and "lat,lon" work too.
-- If a result has a `note` saying the match was approximate, tell the user which place you used.
+| Weather now, "is it raining?", "jacket?" | `weather` (no location = home) |
+| Weekend, next week, hour by hour, "when does the rain start?" | `weather_forecast` (`hourly: true`) |
+| "Any warnings?", details of an alert | `weather_alerts` |
+| Storms, tornado risk, "severe weather today?" | `weather_severe` |
+| Radar, "is that storm close?" | `weather_radar` (`loop: true` for motion) |
+| Clouds, satellite, smoke from above | `weather_satellite` |
+| Air quality, smoke, UV, pollen | `weather_air` |
+| Yesterday, normals, records | `weather_history` |
+| "How sure are they?", "how much rain could we get?" | `weather_confidence` |
+| "Why?", what forecasters think | `weather_discussion` (summarize plainly) |
+| Best time to run, mow, grill, wash the car, stargaze | `weather_best_time` |
+| "Which forecast should I trust?" | `weather_scorecard` |
+| Flights, airport delays, weather on arrival | `weather_travel` |
+| Rivers, tides, waves | `weather_water` |
+| CAPE, shear, tornado ingredients | `weather_science` (`at_peak: true` on storm days) |
+| "Home is Ankeny", "save Mom's place as Ames" | `weather_places` |
 
 ## Alerts and safety (always)
-- Every answer that lists an alert must mention it, even if the user asked about something else.
-- `life_threatening: true` (tornado, flash flood, extreme wind, hurricane, storm surge warnings)
-  goes FIRST, in plain words, with the NWS instructions quoted. Never soften, summarize away, or
-  joke about a warning.
-- If a note says alerts couldn't be checked, say so. Never say "no alerts" in that case.
-- The NWS is the official source in the US. You're relaying it, not replacing it.
+- Any alert in a result gets mentioned, even if the user asked about something else.
+- `life_threatening: true` (tornado, flash flood, extreme wind, hurricane, storm surge) goes FIRST,
+  in plain words, with the instructions quoted. Never soften, summarize away or joke about a warning.
+- A ⚠️ note saying alerts weren't or couldn't be checked: say so. Never say "no alerts" then.
+- The NWS (and Environment Canada, MeteoAlarm) is the official source; you're relaying it.
+
+## Pictures
+- Radar and satellite results have a `media` line like `MEDIA:/…/radar-KDMX-0.gif`. Put that exact
+  line on its own line, not in a code block; the chat shows the picture. Add one line on what it is.
+- Radar is US-only; satellite covers the US and nearby.
+
+## Places
+- No home set: ask where home is, then `weather_places` `action: "set_home"`. Don't guess.
+- "City, ST", "City, Country", ZIP, airport code (KDSM) or "lat,lon" all work. If a `note` says the
+  match was approximate, say which place you used.
+
+## Honesty
+- 3+ days out, `weather_confidence` keeps you honest: "about 60% of model runs show rain", ranges
+  when confidence is low.
+- US history is NOAA station records; elsewhere it's the ERA5 reanalysis, so say "about".
+- The scorecard needs about two weeks of data before it names a winner.
+- Mention a stale or backup source in a few words when a note says so. Keep the units returned.
 
 ## Warning pushes (zero tokens)
-If the user wants warnings pushed to them automatically:
-1. Run `hermes better-weather push setup` in the terminal (add a place, `--level warnings|watches|all`,
-   `--freeze` for a 3 PM freeze heads-up, `--rain` for rain-within-the-hour heads-ups).
-2. If no `better-weather-alerts` cron job exists yet, create one with the cron tool: schedule
-   `every 2m`, `no_agent: true`, script `better-weather-alerts.py`, deliver to the user's chat.
-   The script prints only when something is new, so quiet ticks send nothing and cost nothing.
-3. `hermes better-weather push check` shows what a run would send without sending it.
+1. `hermes better-weather push setup [place] --level warnings|watches|all [--freeze] [--rain]`
+2. If there's no `better-weather-alerts` cron job, create one: `every 2m`, `no_agent: true`, script
+   `better-weather-alerts.py`, deliver to the user's chat. Quiet ticks send nothing.
+3. `hermes better-weather push check` previews a run without sending.
 
-Scheduled briefs with the AI (morning brief, week ahead, weekend) are blueprints:
-`/blueprint better-weather:morning-brief` and friends.
-
-## Confidence and the scorecard
-- For anything 3+ days out, a quick `weather_confidence` check keeps you honest: say "about 60% of
-  model runs show rain" rather than a flat yes or no, and give highs as a range when confidence is low.
-- The scorecard needs about two weeks of daily checks before it names a most-accurate source. Until
-  then, say it's still learning.
-
-## Show the card
-`weather`, `weather_forecast` and `weather_alerts` return a `card`: a short, emoji-formatted block
-made for chat (Telegram, Desktop, terminal). **Send the card as-is** as your answer, then add at most
-one short line of your own if it helps (advice, "rain starts around 3 PM", a caveat from `notes`).
-Don't rewrite it into paragraphs or a table, and don't repeat what it already says. If the user asked
-something specific ("do I need a jacket?"), answer that in one line first, then the card.
+Briefs with the AI: `/blueprint better-weather:morning-brief`, `:week-ahead`, `:weekend-plan`.
 
 ## If asked what Better Weather can do
-Answer from this list; don't read the plugin's files to find out.
-- Now, hourly (72 h) and daily (16 days) forecasts for any place; home is the default
-- Official alerts (US, Canada; Europe via MeteoAlarm) and severe-storm risk at the exact spot
-- Radar and satellite pictures, still or animated
-- Air quality/smoke/UV (pollen in Europe), past weather with normals and records
-- Forecast confidence (82 model runs), the NWS forecasters' discussion, which forecast has been most
-  accurate at home (scorecard)
-- Best time to walk/run/bike/golf/mow/grill/wash the car/stargaze; travel (airports, delays, weather
-  on arrival); rivers, tides and waves; storm science (CAPE, shear, ECAPE)
-- `/weather` commands that answer without the AI, zero-token warning pushes (plus freeze and
-  rain-soon heads-ups), and scheduled briefs (`/blueprint better-weather:morning-brief`)
-
-## Answer style
-- Lead with what matters: temperature and sky now, then what's coming, then alerts.
-- Mention the source and time once ("KDSM report from 3:35 PM"). If a note says data is stale or
-  came from a backup source, say that in a few words.
-- History comes from the ERA5 reanalysis, not official station records; say "about" for records.
-- Use the units the tool returned; don't convert unless the user asks.
+Answer from this list; don't read the plugin's files.
+- Now, hourly (72 h) and daily (16 days) for any place; official alerts (US, Canada, 38 European
+  countries) and severe-storm risk at the exact spot; radar and satellite pictures
+- Air quality/smoke/UV/pollen; past weather with normals and records; forecast confidence; the
+  forecasters' discussion; which forecast has been most accurate at home
+- Best time for outdoor plans; travel (airports, delays, weather on arrival); rivers, tides, waves;
+  storm science (CAPE, shear, ECAPE)
+- `/weather` commands without the AI, zero-token warning pushes, scheduled briefs
 
 ## /weather
-`/weather`, `/weather forecast`, `/weather hourly`, `/weather alerts`, `/weather severe`,
-`/weather radar [loop]`, `/weather satellite [loop]`, `/weather air`, `/weather history [date]`
-(each optionally followed by a place) answer without the AI.
+`/weather`, `forecast`, `hourly`, `alerts`, `severe`, `radar [loop]`, `satellite [loop]`, `air`,
+`history [date]`, each optionally followed by a place. No AI involved.

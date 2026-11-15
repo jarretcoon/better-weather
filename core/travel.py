@@ -67,16 +67,14 @@ def airport(code: str, units_: str, clock: str) -> dict[str, Any]:
     metar = http.get_json(f"{AWC}/metar", {"ids": icao, "format": "json"}, ttl=5 * 60, max_stale=3 * 3600)
     rows = metar.data if isinstance(metar.data, list) else []
     if not rows:
-        return {"airport": icao, "error": f"No current report for {icao}.",
-                "hint": "Check the code, or ask for weather at the city instead."}
+        guessed = icao != code.strip().upper()
+        hint = ("Outside the lower 48 use the 4-letter ICAO code, e.g. EGLL (Heathrow), PHNL (Honolulu), "
+                "PANC (Anchorage), CYYZ (Toronto)." if guessed
+                else "Check the code, or ask for weather at the city instead.")
+        return {"airport": icao, "error": f"No current report for {icao}.", "hint": hint}
     m = rows[0]
     observed = datetime.fromtimestamp(int(m["obsTime"]), UTC) if m.get("obsTime") else None
-    tz = units.zone(None)
-    try:
-        info = nws.station_info(icao)
-        tz = units.zone((info or {}).get("timezone"))
-    except http.FetchError:
-        pass
+    tz = units.zone(_airport_zone(icao, m.get("lat"), m.get("lon")))
     now = now_utc().astimezone(tz)
     ceiling = _ceiling_ft(m.get("clouds") or [])
     cat = m.get("fltCat") or _category(m.get("visib"), ceiling)
@@ -104,6 +102,22 @@ def airport(code: str, units_: str, clock: str) -> dict[str, Any]:
     except http.FetchError as exc:
         result.setdefault("notes", []).append(f"FAA status unavailable ({exc})")
     return result
+
+
+def _airport_zone(icao: str, lat: Any, lon: Any) -> str | None:
+    try:
+        name = (nws.station_info(icao) or {}).get("timezone")
+        if name:
+            return str(name)
+    except http.FetchError:
+        pass
+    la, lo = units.num(lat), units.num(lon)
+    if la is None or lo is None:
+        return None
+    try:
+        return openmeteo.timezone_at(la, lo)
+    except http.FetchError:
+        return None
 
 
 def _taf(icao: str, tz: Any, clock: str, now: datetime) -> list[dict[str, Any]]:

@@ -65,3 +65,20 @@ def test_error_message_includes_problem_detail():
     http.set_transport_for_tests(transport)
     with pytest.raises(http.FetchError, match="Bad point"):
         http.get_json("https://example.test/f", ttl=60)
+
+
+def test_204_is_an_empty_answer_not_an_error():
+    transport, _ = _transport([httpx.Response(204)])
+    http.set_transport_for_tests(transport)
+    got = http.get_json("https://example.test/g", ttl=60)
+    assert got.data is None and not got.found and not got.stale
+
+
+def test_a_cached_404_is_rechecked_after_a_day(monkeypatch):
+    transport, calls = _transport([httpx.Response(404, json={}), httpx.Response(200, json={"back": 1})])
+    http.set_transport_for_tests(transport)
+    http.get_json("https://example.test/h", ttl=30 * 86400, allow_404=True)
+    real = time.time
+    monkeypatch.setattr(http.time, "time", lambda: real() + 2 * 86400)
+    assert http.get_json("https://example.test/h", ttl=30 * 86400, allow_404=True).data == {"back": 1}
+    assert len(calls) == 2

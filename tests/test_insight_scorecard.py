@@ -136,3 +136,16 @@ def test_scorecard_collects_once_a_day(card):
     assert scorecard.collect(DSM) == 15  # 5 models x 3 days (NWS unreachable here)
     assert scorecard.collect(DSM) == 0
     assert json.loads(json.dumps(scorecard._meta("collected_day"))) == "2026-11-15"
+
+
+def test_scorecard_starts_over_when_home_moves(card):
+    clock.freeze_for_tests(datetime(2026, 12, 20, 18, 0, tzinfo=UTC))
+    scorecard._meta("home", scorecard._place_key(DSM))
+    db = scorecard._db()
+    db.execute("INSERT INTO predictions VALUES ('2026-12-10', 1, 'nws', 1, -9, NULL, '2026-12-09')")
+    db.execute("INSERT INTO observed VALUES ('2026-12-10', 0, -10, 0, 'test')")
+    db.commit()
+    elsewhere = places.Place("Miami, Florida", 25.77, -80.19, country="US", timezone="America/New_York")
+    r = scorecard.report(elsewhere, "us", 30)
+    assert r["ranking"] == [] and scorecard._db().execute("SELECT COUNT(*) FROM predictions").fetchone()[0] == 0
+    assert scorecard._meta("home") == scorecard._place_key(elsewhere)

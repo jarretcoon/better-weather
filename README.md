@@ -1,15 +1,45 @@
 # Better Weather 🌦️
 
-A reliable weather plugin for [Hermes Agent](https://hermes-agent.nousresearch.com) that works the
-same on macOS, Windows and Linux.
+**Your Hermes agent's weather desk.**
 
-- **Pure Python, nothing to compile.** Only `httpx` and `numpy` (both already part of Hermes) and,
-  on Windows, `tzdata`. Works on every Python Hermes supports (3.11 and up), Intel and ARM.
-- **Free sources, no keys, no accounts:** the US National Weather Service, Open-Meteo (worldwide),
-  the NOAA Storm Prediction Center, NOAA GOES satellites, NOAA's ACIS climate records and the Iowa
-  Environmental Mesonet.
-- **Never fails silently.** Every source has a timeout, retries and a fallback; every answer says
-  where it came from and how old it is, and says so plainly when something couldn't be checked.
+Ask your agent about the weather the way you'd ask a friend who happens to be a meteorologist, and
+get a straight answer from the official sources: what it's doing now, what's coming, whether to
+worry, and how sure anyone really is. Answers arrive as clean chat cards, radar and satellite come
+through as real pictures, and warnings can reach your phone on their own without spending a single
+AI token.
+
+> **Des Moines, IA** · 4:58 AM\
+> 🌙 **28°F** clear · feels 25°\
+> 💨 E 3 mph · 💧 86%\
+> ⏱️ 5 AM 🌙 30° · 7 AM 🌤️ 29° · 9 AM ☁️ 34° · 11 AM ☀️ 42°
+>
+> **Overnight** ☁️ 26° low · Partly Cloudy\
+> **Sunday** 🌤️ 51° high · Mostly Sunny
+>
+> ✅ No alerts\
+> 🌅 7:03 AM · 🌇 4:54 PM
+
+### Things you can ask
+- "Do I need a jacket?" · "When does the rain start tomorrow?"
+- "Any storms coming this week? What's the tornado risk here?" · "Show me the radar."
+- "How sure are they about snow on Thursday?" · "Why is the forecast so uncertain?"
+- "Best time to mow this weekend?" · "Good night for stargazing?"
+- "Will my flight out of O'Hare be delayed, and what's it like when I land in Denver?"
+- "Was yesterday a record?" · "Which forecast has been most accurate here lately?"
+
+### What makes it different
+- **Official sources first, and it shows its work.** A real station report beats a model guess;
+  forecasts and warnings come from the National Weather Service, the Storm Prediction Center,
+  Environment Canada and MeteoAlarm; every answer says where it came from and how old it is.
+- **Never a false all-clear.** Warnings are matched to your exact spot. If they couldn't be checked
+  (a service is down, or there's no official feed there), it says so instead of "no alerts".
+- **Made for chat.** Cards read well in Telegram, the Desktop app and the terminal; pictures arrive
+  as images; `/weather` answers instantly without the AI at all.
+- **As deep as you want to go.** How sure the forecast is (80+ model runs), the forecasters' own
+  reasoning, storm science (CAPE, shear, ECAPE), and a scorecard of which forecast has been right
+  at your home.
+- **Light and everywhere.** Pure Python with nothing to compile, the same on macOS, Windows and
+  Linux. Free public sources: no keys, no accounts, no telemetry.
 
 ## Tools
 
@@ -83,6 +113,8 @@ when it's back. Scheduled AI briefs are blueprints: `/blueprint better-weather:m
 
 ## Install
 
+Needs Hermes Agent 0.23.1 or newer.
+
 ```bash
 hermes plugins install jarretcoon/better-weather
 hermes plugins enable better-weather
@@ -112,10 +144,39 @@ agent where home is.
 - NWS alert *updates* are kept (an ongoing warning is re-issued as an update; dropping those loses
   warnings that are still in effect).
 
-## Privacy
+## What it sends and stores
 
-No accounts or keys. Coordinates are sent rounded (3 decimals, about 100 m, to the NWS; 2 decimals,
-about 1 km, to Open-Meteo). Home and saved places stay in your own Hermes config and plugin state.
+- **Network:** read-only HTTPS requests to the public services listed below, and nothing else. Each
+  request identifies itself as the Better Weather plugin. No accounts, keys or telemetry.
+  Coordinates are rounded (3 decimals, about 100 m, for the NWS; 2 decimals, about 1 km, for
+  Open-Meteo).
+- **Files:** only Hermes' data folder for this plugin (`plugin-data/better-weather/`: response
+  cache, scorecard, pictures kept 24 hours, push state). Home and saved places live in your Hermes
+  config and plugin state. If you set up warning pushes, `push setup` also writes one script,
+  `$HERMES_HOME/scripts/better-weather-alerts.py`, because Hermes runs no-agent cron scripts only
+  from there.
+- **Background work:** the forecast scorecard checks the home forecast a few times a day (a Hermes
+  idle task; on Hermes versions without idle tasks it runs after a `weather` question instead, at
+  most every 6 hours). The warning push runs only if you create its cron job yourself.
+- **Nothing else:** no shell commands, no credentials, no reading outside its own data.
+
+## Data sources and terms
+
+| Source | Used for | Terms |
+|---|---|---|
+| [National Weather Service](https://www.weather.gov) (api.weather.gov), NWS radar, NWPS rivers | US conditions, forecasts, alerts, discussions, radar, river gauges | US government work, public domain |
+| [NOAA Storm Prediction Center](https://www.spc.noaa.gov) | Severe-storm outlooks | Public domain |
+| [NOAA GOES / STAR](https://www.star.nesdis.noaa.gov/GOES/) | Satellite pictures | Public domain |
+| [NOAA ACIS](https://www.rcc-acis.org) | US station history, normals and records | Public domain |
+| [NOAA CO-OPS](https://tidesandcurrents.noaa.gov) | Tide times | Public domain |
+| [aviationweather.gov](https://aviationweather.gov), [FAA NAS status](https://nasstatus.faa.gov) | Airport reports, forecasts, delays | Public domain |
+| [Open-Meteo](https://open-meteo.com) | Worldwide forecasts, place search, ensembles, air quality, history (ERA5), marine | Free for **non-commercial** use; data under CC BY 4.0, "Weather data by Open-Meteo.com" |
+| [Environment and Climate Change Canada](https://weather.gc.ca) (GeoMet) | Canadian alerts | Open Government Licence – Canada |
+| [MeteoAlarm](https://www.meteoalarm.org) (EUMETNET) | Alerts in 38 European countries | MeteoAlarm terms of use |
+| [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu) | Backup radar pictures | Free public service |
+
+Open-Meteo's free API is meant for personal, non-commercial use. Commercial use needs your own
+Open-Meteo plan, which this plugin doesn't support yet.
 
 ## Storm science accuracy
 
@@ -137,3 +198,7 @@ python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 
 The repo root is the plugin package (Hermes imports it directly), so run pytest on `tests`, not
 on the root.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

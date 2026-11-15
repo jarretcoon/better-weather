@@ -57,7 +57,25 @@ def test_alerts_tool_explains_region_only_matching():
     place = places.Place("Nîmes, Occitanie, FR", 43.84, 4.36, country="FR", timezone="Europe/Paris")
     r = report.alerts(place, None, "12h")
     assert r["count"] == 0 and r["orange_and_red_in_country"][0]["regions"] == ["Gard"]
-    assert "region name" in r["notes"][0]
+    assert "name this town or region" in r["notes"][0]
+    assert "✅" not in r["card"] and "⚠️" in r["card"]  # never "no alerts" when it can't tell
+
+
+def test_region_name_matches_count_when_the_country_has_no_map():
+    warnings = [_ma_warning("Rain warning", 3, ["Hérault", "Gard"]), _ma_warning("Wind", 2, ["Var"])]
+    http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(200, json={"warnings": warnings})))
+    place = places.Place("Nîmes, Occitanie, FR", 43.84, 4.36, country="FR", timezone="Europe/Paris",
+                         district="Gard")
+    r = report.alerts(place, None, "12h")
+    assert [a["event"] for a in r["alerts"]] == ["Rain warning"]
+    assert r["alerts"][0]["regions"][0] == "Gard" and r["alerts"][0]["matched_by"] == "region name"
+    assert "Rain warning" in r["card"]
+
+
+def test_unknown_country_is_not_reported_as_clear():
+    place = places.Place("10.000, 20.000", 10.0, 20.0, country="TD")
+    r = report.alerts(place, None, "12h")
+    assert r["count"] == 0 and "⚠️" in r["card"] and "✅" not in r["card"]
 
 
 def test_expired_warnings_are_dropped():

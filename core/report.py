@@ -15,7 +15,7 @@ from typing import Any, TypeVar
 from . import display, http, units
 from .clock import now_utc
 from .places import Place
-from .sources import intl_alerts, nws, openmeteo, spc
+from .sources import intl_alerts, nws, openmeteo, radar, spc
 
 T = TypeVar("T")
 
@@ -92,13 +92,18 @@ def _place_tz(place: Place, point: dict[str, Any] | None, om: http.Fetched | Non
 
 
 def _nws_point(place: Place, notes: list[str]) -> dict[str, Any] | None:
+    return _nws_lookup(place, notes)[0]
+
+
+def _nws_lookup(place: Place, notes: list[str]) -> tuple[dict[str, Any] | None, bool]:
+    """(grid point or None, whether we know the answer). False = NWS was unreachable for a maybe-US spot."""
     if not place.maybe_us:
-        return None
+        return None, True
     try:
-        return nws.point(place.lat, place.lon)
+        return nws.point(place.lat, place.lon), True
     except http.FetchError as exc:
         notes.append(f"NWS lookup failed ({exc}); using Open-Meteo instead")
-        return None
+        return None, False
 
 
 def _stale_note(label: str, fetched: http.Fetched | None, notes: list[str]) -> None:
@@ -107,10 +112,25 @@ def _stale_note(label: str, fetched: http.Fetched | None, notes: list[str]) -> N
                      f"{round(fetched.age_seconds / 60)} min ago")
 
 
+def _is_daytime(sun: tuple[str, str] | None, hour: int) -> bool:
+    """Whole-hour check against that day's sunrise/sunset ("07:03", "16:54"); 7–18 when unknown."""
+    if not sun:
+        return 7 <= hour < 18
+    try:
+        up, down = (int(x[:2]) * 60 + int(x[3:5]) for x in sun)
+    except ValueError:
+        return 7 <= hour < 18
+    return up <= hour * 60 + 30 < down
+
+
 def _om_hours(om: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict[str, Any]]:
     data = (om.data if om else None) or {}
     hourly = data.get("hourly") or {}
     times = hourly.get("time") or []
+    daily = data.get("daily") or {}
+    sun_by_day = {str(d)[:10]: (str(up)[11:16], str(down)[11:16])
+                  for d, up, down in zip(daily.get("time") or [], daily.get("sunrise") or [],
+                                         daily.get("sunset") or [], strict=False) if up and down}
     out = []
     for i, stamp in enumerate(times):
         dt = units.parse_time(stamp)
@@ -126,7 +146,7 @@ def _om_hours(om: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict[str, 
 
         out.append({
             "time": units.day_clock(dt, fmt.clock, fmt.now),
-            "_day": 7 <= dt.hour < 18,
+            "_day": _is_daytime(sun_by_day.get(str(stamp)[:10]), dt.hour),
             "temp": units.temp_value(pick("temperature_2m"), fmt.units),
             "feels_like": units.temp_value(pick("apparent_temperature"), fmt.units),
             "sky": openmeteo.describe(pick("weather_code")),
@@ -165,8 +185,11 @@ def _nws_periods(fetched: http.Fetched | None, count: int, detailed_for: int) ->
     periods = (((fetched.data if fetched else None) or {}).get("properties") or {}).get("periods") or []
     out = []
     for i, p in enumerate(periods[:count]):
+        start = units.parse_time(p.get("startTime"))
         entry = {
             "name": p.get("name"),
+            "_date": start.date().isoformat() if start else None,
+            "_dow": start.strftime("%a") if start else None,
             "temp": p.get("temperature"),
             "temp_unit": p.get("temperatureUnit"),
             "high_or_low": "high" if p.get("isDaytime") else "low",
@@ -178,6 +201,12 @@ def _nws_periods(fetched: http.Fetched | None, count: int, detailed_for: int) ->
             entry["detail"] = p.get("detailedForecast")
         out.append(entry)
     return out
+
+
+def _om_index_after(om: http.Fetched | None, last_day: Any) -> int:
+    """Index of the first Open-Meteo day after the last NWS period (7 if unknown)."""
+    times = [str(t)[:10] for t in ((((om.data if om else None) or {}).get("daily")) or {}).get("time") or []]
+    return times.index(str(last_day)) + 1 if last_day and str(last_day) in times else 7
 
 
 def _om_days(om: http.Fetched | None, fmt: _Fmt, start: int, count: int) -> list[dict[str, Any]]:
@@ -234,22 +263,20 @@ def _hpa_to_pa(value: Any) -> float | None:
 def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place.note else []
     sources: list[str] = []
-    point = _nws_point(place, notes)
+    point, nws_known = _nws_lookup(place, notes)
     metric = units_ == "metric"
 
     om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
-    intl_job = _Job("Official alerts", _intl_alerts, place, clock) if not point and not place.maybe_us else None
-    obs_job = fc_job = hr_job = al_job = None
+    intl_job = _Job("Official alerts", _intl_alerts, place, clock) if not point and nws_known else None
+    obs_job = fc_job = al_job = None
     if point:
         obs_job = _Job("NWS observation", nws.latest_observation, point)
         fc_job = _Job("NWS forecast", nws.forecast, point, metric=metric)
-        hr_job = _Job("NWS hourly forecast", nws.forecast, point, hourly=True, metric=metric)
         al_job = _Job("NWS alerts", nws.alerts_at, place.lat, place.lon)
 
     om = om_job.result(notes)
     obs = obs_job.result(notes) if obs_job else None
     fc = fc_job.result(notes) if fc_job else None
-    hr = hr_job.result(notes) if hr_job else None
     al = al_job.result(notes) if al_job else None
     fmt = _Fmt(units_, clock, _place_tz(place, point, om))
 
@@ -303,12 +330,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         }
         notes.append(f"Only an old station report is available ({obs.get('age_min')} min old)")
 
-    next_hours = _nws_hours(hr, fmt, 8) if hr else []
-    if next_hours:
-        sources.append("NWS hourly forecast")
-        _stale_note("NWS hourly forecast", hr, notes)
-    else:
-        next_hours = _om_hours(om, fmt, 8)
+    next_hours = _om_hours(om, fmt, 8)  # for the card's "next hours" line only
 
     periods = _nws_periods(fc, 3, detailed_for=2) if fc else []
     if periods:
@@ -322,27 +344,26 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         _stale_note("Open-Meteo", om, notes)
 
     alerts: list[dict[str, Any]] = []
+    alerts_checked = False
     if al is not None:
         alerts = nws.normalize_alerts(al.data)
+        alerts_checked = True
         sources.append("NWS alerts")
         _stale_note("NWS alerts", al, notes)
-    elif point:
+    elif intl_job is None:
         notes.append("⚠️ Alerts could not be checked right now — don't assume there are none")
     else:
-        intl = intl_job.result(notes) if intl_job else None
-        if intl is None and intl_job is not None:
+        intl = intl_job.result(notes)
+        if intl is None:
             notes.append("⚠️ Official alerts could not be checked — don't assume there are none")
-        if intl:
+        else:
             alerts = [{"event": a.get("event"), "severity": a.get("severity"), "ends": None,
                        "headline": a.get("headline"), "life_threatening": a.get("life_threatening")}
                       for a in intl.get("alerts") or []]
+            alerts_checked = bool(intl.get("_exact"))
             if intl.get("source"):
                 sources.append(str(intl["source"]))
-            big = intl.get("orange_and_red_in_country") or []
-            if big:
-                notes.append(f"{len(big)} orange/red warning(s) elsewhere in the country or region; "
-                             "weather_alerts lists which regions they name")
-            notes.extend(n for n in intl.get("notes") or [] if n.startswith("Official alerts"))
+            notes.extend(intl.get("notes") or [])
 
     daily = ((om.data if om else None) or {}).get("daily") or {}
     sun = {}
@@ -353,11 +374,12 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         "place": place.public(),
         "as_of": units.clock(fmt.now, fmt.clock),
         "current": _clean(current),
-        "next_hours": next_hours,
         "forecast": periods,
         "alerts": _compact_alerts(alerts, fmt),
-        "sun": sun,
         "units": units_,
+        "_next_hours": next_hours,
+        "_sun": sun,
+        "_alerts_checked": alerts_checked,
         "sources": sources,
         "notes": notes,
     }
@@ -407,7 +429,8 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
             _stale_note("NWS forecast", nws_fc, notes)
             result["periods"] = periods
             if days > 7:
-                extra = _om_days(om, fmt, 7, days - 7)
+                first = _om_index_after(om, periods[-1].get("_date"))
+                extra = _om_days(om, fmt, first, days - first)
                 if extra:
                     result["extended_days"] = extra
                     sources.append("Open-Meteo (days 8+)")
@@ -435,13 +458,11 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     elif place is None:
         raise ValueError("alerts() needs a place or an area")
     else:
-        if not place.maybe_us:
-            return _intl_alerts(place, clock)
         lookup_notes: list[str] = []
-        point = _nws_point(place, lookup_notes)
-        if point is None and not lookup_notes:
-            return {"place": place.public(), "count": 0, "alerts": [],
-                    "notes": ["This spot is outside NWS coverage; no official US alerts apply."]}
+        point, known = _nws_lookup(place, lookup_notes)
+        if point is None and known:
+            intl = _intl_alerts(place, clock)
+            return display.card_first(display.strip_private(intl), display.alerts_card(intl))
         notes.extend(lookup_notes)
         fetched = nws.alerts_at(place.lat, place.lon)
         label = place.name
@@ -450,11 +471,20 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     fmt = _Fmt("us", clock, tz)
     items = nws.normalize_alerts(fetched.data)
     for item in items:
-        item["starts"] = fmt.at(item.get("starts"))
-        item["ends"] = fmt.at(item.get("ends"))  # None = no set end ("until further notice")
-        item["next_update_by"] = fmt.at(item.pop("expires", None))
+        # statewide lists span time zones: show each alert in its own office's offset
+        f = _Fmt("us", clock, _own_zone(item)) if area else fmt
+        item["starts"] = f.at(item.get("starts"))
+        item["ends"] = f.at(item.get("ends"))  # None = no set end ("until further notice")
+        item["next_update_by"] = f.at(item.pop("expires", None))
         item.pop("id", None)
         item.pop("references", None)
+    if len(items) > 5:  # an outbreak can list dozens: keep each one short, the headline says the most
+        short = len(items) > 12
+        for item in items:
+            for key, limit in (("description", 250 if short else 600), ("instruction", 200 if short else 300)):
+                if item.get(key):
+                    item[key] = _shorten(item[key], limit)
+        notes.append(f"{len(items)} alerts: long texts shortened; ask for one place to get its full text")
     result = {
         "where": label,
         "place": place.public() if place else None,
@@ -479,29 +509,56 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
             for key in ("starts", "ends", "next_update_by"):
                 a[key] = fmt.at(a.get(key))
         out = {"where": place.name, "place": place.public(), "count": len(items), "alerts": [_clean(a) for a in items],
-               "checked": units.clock(fmt.now, fmt.clock), "source": "Environment and Climate Change Canada"}
+               "checked": units.clock(fmt.now, fmt.clock), "source": "Environment and Climate Change Canada",
+               "_exact": True}
         if not items:
             out["summary"] = f"No active Environment Canada alerts for {place.name}."
         return out
     if country in intl_alerts.EU_SLUGS:
-        eu = intl_alerts.europe(country, place.lat, place.lon)
-        for group in ("exact_matches", "orange_and_red_in_country"):
+        town = place.name.split(",")[0].split("(")[0]
+        eu = intl_alerts.europe(country, place.lat, place.lon, (town, place.district, place.region))
+        for group in ("exact_matches", "region_name_matches", "orange_and_red_in_country"):
             for a in eu[group]:
                 a["starts"], a["ends"] = fmt.at(a.get("starts")), fmt.at(a.get("ends"))
+        found = eu["exact_matches"] + eu["region_name_matches"]
+        big = eu["orange_and_red_in_country"]
         notes = []
-        if not eu["exact_matches"] and eu.get("has_shapes"):
-            notes.append(f"No active warning in {eu['country']} covers this exact spot.")
-        elif not eu["exact_matches"]:
-            notes.append(f"MeteoAlarm lists {eu['country']}'s warnings by region name, not map shape, so this "
-                         "can't confirm which apply to this exact spot. Check whether the region is named below.")
-        return {"where": place.name, "place": place.public(), "count": len(eu["exact_matches"]),
-                "alerts": [_clean(a) for a in eu["exact_matches"]],
-                "orange_and_red_in_country": [_clean(a) for a in eu["orange_and_red_in_country"]],
+        if eu.get("has_shapes"):
+            if not found:
+                notes.append(f"No active warning in {eu['country']} covers this exact spot.")
+            if big:
+                notes.append(f"{len(big)} orange/red warning(s) elsewhere in {eu['country']}.")
+        else:
+            notes.append(f"⚠️ MeteoAlarm names {eu['country']}'s warning areas but has no map of them, so only "
+                         "warnings that name this town or region are shown"
+                         + (f"; {len(big)} more orange/red elsewhere in the country (weather_alerts lists "
+                            "the regions)" if big else ""))
+        return {"where": place.name, "place": place.public(), "count": len(found),
+                "alerts": [_clean(a) for a in found],
+                "orange_and_red_in_country": [_clean(a) for a in big],
                 "country_counts": eu["country_counts"], "checked": units.clock(fmt.now, fmt.clock),
-                "source": eu["source"], "notes": notes}
-    return {"place": place.public(), "count": 0, "alerts": [], "notes": [
-        "Official alerts are available for the US, Canada and 38 European countries so far. "
-        "Check the national weather service there."]}
+                "source": eu["source"], "notes": notes, "_exact": bool(eu.get("has_shapes"))}
+    if not country:
+        why = ("⚠️ Official alerts weren't checked: these coordinates are outside the US and no country is "
+               "known for them. Ask with a place name to check.")
+    else:
+        why = ("⚠️ No official alert feed for this country yet (US, Canada and 38 European countries so far). "
+               "Check the national weather service there.")
+    return {"where": place.name, "place": place.public(), "count": 0, "alerts": [], "notes": [why],
+            "_exact": False}
+
+
+def _shorten(text: Any, limit: int) -> str:
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def _own_zone(item: dict[str, Any]) -> tzinfo:
+    for key in ("starts", "ends", "expires"):
+        dt = units.parse_time(item.get(key))
+        if dt is not None and dt.tzinfo is not None:
+            return dt.tzinfo
+    return UTC
 
 
 def _offset_of_first_alert(data: Any) -> tzinfo:
@@ -519,7 +576,8 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place.note else []
     point = _nws_point(place, notes)
     om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
-    spc_job = _Job("SPC outlook", spc.risk_at, place.lat, place.lon) if point else None
+    in_spc_area = bool(point) and radar.in_conus(place.lat, place.lon)
+    spc_job = _Job("SPC outlook", spc.risk_at, place.lat, place.lon) if in_spc_area else None
     al_job = _Job("NWS alerts", nws.alerts_at, place.lat, place.lon) if point else None
     om = om_job.result(notes)
     risk = spc_job.result(notes) if spc_job else None
@@ -536,7 +594,7 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
                 notes.append(f"Day {day['day']} outlook could not be refreshed; showing an older copy")
         result["spc_outlook"] = risk.get("days", [])
         notes.extend(risk.get("notes", []))
-    elif not point:
+    elif not in_spc_area:
         notes.append("SPC severe outlooks cover the lower 48 US states only")
 
     if al is not None:
@@ -549,6 +607,8 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
         }) for a in storm]
     elif point:
         notes.append("⚠️ Watches and warnings could not be checked right now — don't assume there are none")
+    else:
+        notes.append("⚠️ Official warnings weren't checked here; weather_alerts checks Canada and Europe")
 
     hourly = ((om.data if om else None) or {}).get("hourly") or {}
     times = hourly.get("time") or []
@@ -580,14 +640,14 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
                 "source": "Open-Meteo model guidance",
             })
     result["notes"] = notes
-    result["summary"] = severe_text(result)
+    result["summary"] = severe_text(result, alerts_checked=al is not None)
     result["sources"] = [s for s in ("NOAA Storm Prediction Center" if risk else None,
                                       "NWS alerts" if al is not None else None,
                                       "Open-Meteo" if om is not None else None) if s]
     return _clean(result)
 
 
-def severe_text(r: dict[str, Any]) -> str:
+def severe_text(r: dict[str, Any], alerts_checked: bool = True) -> str:
     lines = []
     for a in r.get("storm_alerts") or []:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
@@ -603,4 +663,8 @@ def severe_text(r: dict[str, Any]) -> str:
     m = r.get("model_next_48h") or {}
     if m.get("thunderstorm_hours"):
         lines.append(f"Models show thunderstorms starting around {m.get('first_thunder')}")
-    return "\n".join(lines) or "No severe weather signals found."
+    if lines:
+        return "\n".join(lines)
+    if alerts_checked:
+        return "No severe weather signals found."
+    return "Models show no thunderstorms in the next 48 hours (official warnings weren't checked here)."
