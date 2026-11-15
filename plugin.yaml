@@ -1,15 +1,19 @@
 name: better-weather
-version: 0.8.1
+version: 0.9.0
 manifest_version: 2
 api_version: 1
+requires_hermes: ">=0.23.1"
 description: >
-  Reliable weather for Hermes on macOS, Windows and Linux: current conditions, forecasts up to
-  16 days, official alerts, severe-storm risk at your exact spot, radar and satellite pictures,
-  air quality and weather history, plus zero-token warning pushes. Pure Python, no compiled
-  dependencies, free keyless sources (NWS, Open-Meteo, Storm Prediction Center, NOAA GOES).
+  Your agent's weather desk. Ask in plain words and get chat-ready answers from the official
+  sources: conditions and forecasts, warnings matched to your exact spot (US, Canada, 38 European
+  countries), Storm Prediction Center risk, radar and satellite pictures, plus how sure the
+  forecast is, the forecasters' own reasoning, and which forecast has been right at your home.
+  Warnings can be pushed to your chat without using the AI. Free public sources, no keys;
+  macOS, Windows and Linux.
 author: Jarret Coon
+license: MIT
 homepage: https://github.com/jarretcoon/better-weather
-tags: [weather, forecast, alerts, severe-weather]
+tags: [weather, forecast, alerts, severe-weather, radar, satellite, nws, noaa]
 provides_tools:
   - weather
   - weather_forecast

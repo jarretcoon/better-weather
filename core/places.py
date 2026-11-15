@@ -3,8 +3,14 @@ a saved place name) into coordinates."""
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
+import tempfile
+import threading
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from . import http, settings
@@ -40,6 +46,9 @@ _HOME_WORDS = {"", "home", "here", "my house", "my place", "house", "local", "my
 _COORDS = re.compile(r"^\s*(-?\d{1,2}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)\s*$")
 _ZIP = re.compile(r"^\d{5}(?:-\d{4})?$")
 _ICAO = re.compile(r"^[A-Z][A-Z0-9]{3}$")
+PLACES_FILE = "places.json"  # in the plugin's data folder, so the Desktop backend sees the same places
+_places_lock = threading.RLock()
+logger = logging.getLogger(__name__)
 
 
 class PlaceError(Exception):
@@ -58,6 +67,7 @@ class Place:
     timezone: str | None = None
     kind: str = "search"
     note: str | None = None
+    district: str | None = None  # county/department, used to match European warnings by region name
 
     @property
     def maybe_us(self) -> bool:
@@ -91,6 +101,7 @@ def _from_result(result: dict[str, Any], kind: str, note: str | None = None) -> 
         timezone=result.get("timezone"),
         kind=kind,
         note=note,
+        district=result.get("admin2"),
     )
 
 
@@ -147,7 +158,7 @@ def _zip(text: str) -> Place:
         raise PlaceError(f"Couldn't find US ZIP code {code}.")
     place = _from_result(us[0], "zip")
     return Place(f"{place.name} ({code})", place.lat, place.lon, place.country, place.region,
-                 place.timezone, "zip")
+                 place.timezone, "zip", district=place.district)
 
 
 def _airport(code: str) -> Place | None:
@@ -162,25 +173,86 @@ def _airport(code: str) -> Place | None:
                  info.get("timezone"), "airport")
 
 
+def _coords(lat: float, lon: float) -> Place:
+    """Coordinates: the US grid lookup gives the timezone and nearest town; elsewhere ask Open-Meteo
+    for the timezone. Either lookup failing leaves the field empty; the tools still work."""
+    name = f"{lat:.3f}, {lon:.3f}"
+    try:
+        point = nws.point(lat, lon)
+    except http.FetchError:
+        return Place(name, lat, lon, kind="coords")
+    if point:
+        near = (point.get("relativeLocation") or {}).get("properties") or {}
+        town = ", ".join(str(near[k]) for k in ("city", "state") if near.get(k))
+        return Place(f"{name} (near {town})" if town else name, lat, lon, "US", US_STATES.get(str(near.get("state"))),
+                     point.get("timeZone"), "coords")
+    try:
+        tz = openmeteo.timezone_at(lat, lon)
+    except http.FetchError:
+        tz = None
+    return Place(name, lat, lon, timezone=tz, kind="coords")
+
+
+def _places_path() -> Path | None:
+    directory = settings.data_dir()
+    return directory / PLACES_FILE if directory else None
+
+
+def _write_places(path: Path, places: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".places.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(places, handle, ensure_ascii=False, indent=1)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def saved_places() -> dict[str, dict[str, Any]]:
-    value = settings.current().state_get("places", {})
-    return dict(value) if isinstance(value, dict) else {}
+    path = _places_path()
+    if path is None:  # outside Hermes (tests, a bare import): in-memory state
+        value = settings.current().state_get("places", {})
+        return dict(value) if isinstance(value, dict) else {}
+    with _places_lock:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            legacy = settings.current().state_get("places", {})  # 0.8.x kept them in Hermes plugin state
+            if isinstance(legacy, dict) and legacy:
+                _write_places(path, legacy)
+                return dict(legacy)
+            return {}
+        except (OSError, ValueError) as exc:
+            raise PlaceError(f"The saved places file can't be read ({exc}).", f"Check {path}.") from exc
+    return data if isinstance(data, dict) else {}
+
+
+def _store_places(places: dict[str, Any]) -> None:
+    path = _places_path()
+    if path is None:
+        settings.current().state_set("places", places)
+        return
+    _write_places(path, places)
 
 
 def save_place(name: str, place: Place) -> dict[str, Any]:
-    places = saved_places()
     record = place.public()
     record["kind"] = "saved"
-    places[name.strip().lower()] = record
-    settings.current().state_set("places", places)
+    with _places_lock:
+        places = saved_places()
+        places[name.strip().lower()] = record
+        _store_places(places)
     return record
 
 
 def remove_place(name: str) -> bool:
-    places = saved_places()
-    if places.pop(name.strip().lower(), None) is None:
-        return False
-    settings.current().state_set("places", places)
+    with _places_lock:
+        places = saved_places()
+        if places.pop(name.strip().lower(), None) is None:
+            return False
+        _store_places(places)
     return True
 
 
@@ -193,7 +265,7 @@ def resolve(text: str | None = None, lat: Any = None, lon: Any = None, *, _depth
             raise PlaceError("lat/lon must be numbers.") from exc
         if not (-90 <= la <= 90 and -180 <= lo <= 180):
             raise PlaceError("lat/lon out of range.")
-        return Place(f"{la:.3f}, {lo:.3f}", la, lo, kind="coords")
+        return _coords(la, lo)
 
     raw = (text or "").strip()
     if raw.lower() in _HOME_WORDS:
@@ -207,12 +279,13 @@ def resolve(text: str | None = None, lat: Any = None, lon: Any = None, *, _depth
             raise PlaceError("The saved home location is invalid.", "Set it again with weather_places.")
         place = resolve(home, _depth=_depth + 1)
         return Place(place.name, place.lat, place.lon, place.country, place.region, place.timezone,
-                     "home", place.note)
+                     "home", place.note, place.district)
 
     saved = saved_places().get(raw.lower())
     if saved:
         return Place(str(saved.get("name") or raw), float(saved["lat"]), float(saved["lon"]),
-                     saved.get("country"), saved.get("region"), saved.get("timezone"), "saved")
+                     saved.get("country"), saved.get("region"), saved.get("timezone"), "saved",
+                     district=saved.get("district"))
 
     match = _COORDS.match(raw)
     if match:

@@ -7,13 +7,15 @@ weeks of history before the ranking means much; it says so until then."""
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
+import time
 from datetime import date, timedelta
 from statistics import mean
 from typing import Any
 
-from . import climate, http, settings, units
+from . import climate, http, places, settings, units
 from .clock import now_utc
 from .places import Place
 from .sources import acis, nws
@@ -35,25 +37,30 @@ _SCHEMA = (
 )
 
 _conn: sqlite3.Connection | None = None
-_lock = threading.Lock()
+_lock = threading.RLock()  # re-entrant: _meta() runs both inside and outside locked blocks
 
 
 def _db() -> sqlite3.Connection:
     global _conn
-    if _conn is None:
-        try:
-            from plugins.plugin_storage import plugin_db  # type: ignore[import-not-found]
+    with _lock:
+        if _conn is None:
+            _conn = _open()
+        return _conn
 
-            conn = plugin_db(settings.PLUGIN_NAME, "scorecard.db")
-        except Exception:
-            directory = settings.data_dir()
-            conn = sqlite3.connect(str(directory / "scorecard.db") if directory else ":memory:",
-                                   check_same_thread=False, timeout=5)
-        for stmt in _SCHEMA:
-            conn.execute(stmt)
-        conn.commit()
-        _conn = conn
-    return _conn
+
+def _open() -> sqlite3.Connection:
+    try:
+        from plugins.plugin_storage import plugin_db  # type: ignore[import-not-found]
+
+        conn = plugin_db(settings.PLUGIN_NAME, "scorecard.db")
+    except Exception:
+        directory = settings.data_dir()
+        conn = sqlite3.connect(str(directory / "scorecard.db") if directory else ":memory:",
+                               check_same_thread=False, timeout=5)
+    for stmt in _SCHEMA:
+        conn.execute(stmt)
+    conn.commit()
+    return conn
 
 
 def reset_for_tests() -> None:
@@ -62,13 +69,21 @@ def reset_for_tests() -> None:
 
 
 def _meta(key: str, value: str | None = None) -> str | None:
-    db = _db()
-    if value is not None:
-        db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+    with _lock:
+        db = _db()
+        if value is not None:
+            db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+            db.commit()
+            return value
+        row = db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+
+def _meta_delete(key: str) -> None:
+    with _lock:
+        db = _db()
+        db.execute("DELETE FROM meta WHERE key = ?", (key,))
         db.commit()
-        return value
-    row = db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-    return row[0] if row else None
 
 
 def _today(place: Place) -> date:
@@ -117,8 +132,64 @@ def _nws_forecast(place: Place) -> dict[str, dict[str, float | None]]:
     return out
 
 
+def _place_key(place: Place) -> str:
+    return f"{place.lat:.2f},{place.lon:.2f}"
+
+
+def _stored_home() -> str | None:
+    home = _meta("home")
+    if home:
+        return home
+    old = _meta("place")  # 0.8.x wrote "name|lat|lon"
+    try:
+        _, lat, lon = str(old).rsplit("|", 2)
+        return f"{float(lat):.2f},{float(lon):.2f}"
+    except ValueError:
+        return None
+
+
+def _same_home(place: Place) -> bool:
+    stored = _stored_home()
+    return stored is None or stored == _place_key(place)
+
+
+HOME_CONFIRM_S = 6 * 3600
+
+
+def _home_moved(place: Place) -> bool:
+    """A different home must show up twice, 6+ hours apart, before the history is cleared, so one odd
+    lookup (a service down, a name resolving somewhere else) can't wipe weeks of data."""
+    key, now = _place_key(place), now_utc().timestamp()
+    seen = str(_meta("home_candidate") or "")
+    seen_key, _, since = seen.partition("@")
+    if seen_key == key:
+        try:
+            return now - float(since) >= HOME_CONFIRM_S
+        except ValueError:
+            pass
+    _meta("home_candidate", f"{key}@{now:.0f}")
+    return False
+
+
+def _start_over(place: Place) -> None:
+    """Home moved: the old city's forecasts and observations would mix with the new one's."""
+    with _lock:
+        db = _db()
+        db.execute("DELETE FROM predictions")
+        db.execute("DELETE FROM observed")
+        db.execute("DELETE FROM meta")
+        db.commit()
+    _meta("home", _place_key(place))
+
+
 def collect(place: Place) -> int:
     """Save today's forecasts for the next 3 days (once per local day). Returns rows written."""
+    if not _same_home(place):
+        if not _home_moved(place):
+            return 0
+        _start_over(place)
+    elif _meta("home_candidate"):
+        _meta_delete("home_candidate")  # home is back to normal: forget the odd one out
     today = _today(place)
     if _meta("collected_day") == today.isoformat():
         return 0
@@ -143,7 +214,7 @@ def collect(place: Place) -> int:
         db.executemany("INSERT OR REPLACE INTO predictions VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
         db.commit()
     _meta("collected_day", today.isoformat())
-    _meta("place", f"{place.name}|{place.lat:.3f}|{place.lon:.3f}")
+    _meta("home", _place_key(place))
     return len(rows)
 
 
@@ -197,9 +268,38 @@ def update(place: Place) -> str:
     return f"saved {added} forecasts, checked {checked} past days"
 
 
+logger = logging.getLogger(__name__)
+RUN_ON_USE = False  # set at load when this Hermes has no idle tasks (they arrived after 0.23.1)
+_kick_lock = threading.Lock()
+_last_kick = 0.0
+
+
+def update_in_background() -> None:
+    """Keep the scorecard going from normal use: off-thread, at most every 6 hours, only with a home."""
+    global _last_kick
+    if not settings.current().home:
+        return
+    with _kick_lock:
+        if _last_kick and time.monotonic() - _last_kick < 6 * 3600:
+            return
+        _last_kick = time.monotonic()
+
+    def run() -> None:
+        try:
+            update(places.resolve("home"))
+        except Exception:
+            logger.debug("better-weather: scorecard update failed", exc_info=True)
+
+    threading.Thread(target=run, name="better-weather-scorecard", daemon=True).start()
+
+
 # --- report ---------------------------------------------------------------------------------------
 
 def report(place: Place, units_: str, days: int = 30) -> dict[str, Any]:
+    if not _same_home(place):
+        return {"place": place.public(), "ranking": [], "notes": [
+            "Home changed recently. The scorecard starts over for the new home once it's confirmed "
+            "(within about 6 hours) and needs about two weeks before it names a winner."]}
     today = _today(place)
     since = (today - timedelta(days=max(7, min(int(days or 30), 365)))).isoformat()
     with _lock:

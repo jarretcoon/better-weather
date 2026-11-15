@@ -22,7 +22,7 @@ def test_weather_now_us_uses_station_report(home):
     r = call("weather")
     assert r["place"]["name"] == "Des Moines, IA"
     assert r["current"]["source"] == "NWS station report" and r["current"]["temp"].endswith("°F")
-    assert r["next_hours"] and r["forecast"]
+    assert r["forecast"] and "⏱️" in r["card"]
     assert "NWS alerts" in r["sources"]
     assert r["card"].startswith("**Des Moines, IA**") and list(r)[:2] == ["card", "how_to_reply"]
 
@@ -31,6 +31,15 @@ def test_weather_now_abroad_uses_open_meteo_and_says_no_alerts(home):
     r = call("weather", location="Tokyo")
     assert r["current"]["source"] == "Open-Meteo model estimate"
     assert any("US, Canada and 38 European countries" in n for n in r["notes"])
+    assert "✅" not in r["card"] and "No official alert feed" in r["card"]
+
+
+def test_history_slash_command_date_is_optional():
+    from better_weather.core import commands
+
+    assert commands._split_day("Des Moines") == ("yesterday", "Des Moines")
+    assert commands._split_day("2026-11-01 Des Moines") == ("2026-11-01", "Des Moines")
+    assert commands._split_day("3 days ago Ames, IA") == ("3 days ago", "Ames, IA")
 
 
 def test_metric_override(home):
@@ -49,9 +58,9 @@ def test_nws_outage_falls_back_and_warns_about_alerts(home):
     http.set_transport_for_tests(replay_transport(nws_down))
     r = call("weather")
     assert r["current"]["source"] == "Open-Meteo model estimate"
-    assert r["next_hours"] and r["forecast"]
+    assert r["forecast"]
     assert any("Alerts could not be checked" in n for n in r["notes"])
-    assert "⚠️ Alerts could not be checked" in r["card"]
+    assert "⚠️ Alerts could not be checked" in r["card"] and "✅" not in r["card"]
 
 
 def test_forecast_daily_extends_past_day_seven(home):
@@ -162,7 +171,8 @@ def test_register_wires_everything_and_matches_manifest():
 def test_schemas_are_well_formed(schema):
     assert schema["parameters"]["type"] == "object"
     assert set(schema["parameters"].get("required", [])) <= set(schema["parameters"]["properties"])
-    assert len(schema["description"].split(".")[0]) <= 110
+    # Tool Search lists each deferred tool by its first sentence, cut at 60 characters
+    assert len(schema["description"].split(". ")[0]) <= 60, schema["description"].split(". ")[0]
 
 
 def test_numpy_is_not_loaded_just_by_loading_the_plugin():
@@ -186,7 +196,7 @@ def test_chat_cards_are_compact_and_table_free(home):
     card = now["card"]
     assert card.startswith("**Des Moines, IA** · ") and "|" not in card
     assert ("✅ No alerts" in card) or ("⚠️" in card) or ("🚨" in card)
-    assert "_daylight" not in now and all("_day" not in h for h in now.get("next_hours", []))
+    assert not any(k.startswith("_") for k in now) and "next_hours" not in now
     daily = call("weather_forecast", days=9)["card"]
     assert daily.splitlines()[0] == "**Des Moines, IA** · forecast" and len(daily.splitlines()) <= 12
     hourly = call("weather_forecast", hourly=True, hours=24)["card"]

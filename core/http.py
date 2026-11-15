@@ -135,7 +135,8 @@ def get_json(
     """Fetch JSON with caching.
 
     * Fresh cache (younger than ``ttl``) is returned without a request.
-    * A 404 with ``allow_404`` is cached like data and returned with ``status=404, data=None``.
+    * A 404 with ``allow_404`` is cached (a day at most) and returned with ``status=404, data=None``.
+    * A 204 (no content) is an empty answer: ``data=None``.
     * If the live request fails, a cached copy younger than ``max_stale`` is returned with
       ``stale=True``; otherwise ``FetchError`` is raised.
     """
@@ -143,12 +144,15 @@ def get_json(
     cache = get_cache()
     cached = cache.get(key)
     now = time.time()
-    if cached is not None and now - cached[2] < ttl:
+    if cached is not None and now - cached[2] < (ttl if cached[0] == 200 else min(ttl, _DAY)):
         status, body, fetched = cached
         return Fetched(json.loads(body) if status == 200 else None, url, fetched, False, status)
 
     try:
         response = _attempt(url, params, headers)
+        if response.status_code == 204:
+            cache.put(key, 200, "null")
+            return Fetched(None, url, time.time(), False, 200)
         if response.status_code == 404 and allow_404:
             cache.put(key, 404, "null")
             return Fetched(None, url, time.time(), False, 404)

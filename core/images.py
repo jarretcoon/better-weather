@@ -82,9 +82,14 @@ def fetch(url: str, name: str, *, ttl: float, max_stale: float = 3 * 3600) -> Im
         content, headers = http.download(url)
         if not looks_like_image(content):
             raise http.FetchError(url, "the server did not return an image")
-        tmp = path.with_suffix(path.suffix + ".part")
-        tmp.write_bytes(content)
-        os.replace(tmp, path)
+        fd, tmp_name = tempfile.mkstemp(dir=root, prefix=path.name + ".", suffix=".part")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(content)
+            os.replace(tmp_name, path)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
         image_time = _iso(headers.get("last-modified"))
         if image_time:
             meta.write_text(image_time, encoding="utf-8")

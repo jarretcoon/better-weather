@@ -95,11 +95,15 @@ def register(ctx: Any) -> None:
             except Exception:
                 logger.debug("better-weather: blueprint %s not registered", bp["key"], exc_info=True)
     add_idle = getattr(ctx, "register_idle_task", None)
-    if callable(add_idle):
-        try:
-            add_idle("scorecard", _scorecard_job, interval_hours=6, min_idle_hours=0, first_run="immediate")
-        except Exception:
-            logger.debug("better-weather: scorecard idle task not registered", exc_info=True)
+    try:
+        if not callable(add_idle):
+            raise AttributeError("register_idle_task")
+        add_idle("scorecard", _scorecard_job, interval_hours=6, min_idle_hours=0, first_run="immediate")
+    except Exception:  # older Hermes: keep the scorecard going from normal weather questions instead
+        from .core import scorecard
+
+        scorecard.RUN_ON_USE = True
+        logger.debug("better-weather: no idle tasks here; scorecard updates on use", exc_info=True)
     logger.info("Better Weather loaded: %d tools", len(tools.TOOLS))
 
 

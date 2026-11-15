@@ -57,7 +57,25 @@ def test_alerts_tool_explains_region_only_matching():
     place = places.Place("Nîmes, Occitanie, FR", 43.84, 4.36, country="FR", timezone="Europe/Paris")
     r = report.alerts(place, None, "12h")
     assert r["count"] == 0 and r["orange_and_red_in_country"][0]["regions"] == ["Gard"]
-    assert "region name" in r["notes"][0]
+    assert "naming this town or area" in r["notes"][0]
+    assert "✅" not in r["card"] and "⚠️" in r["card"]  # never "no alerts" when it can't tell
+
+
+def test_region_name_matches_count_when_the_country_has_no_map():
+    warnings = [_ma_warning("Rain warning", 3, ["Hérault", "Gard"]), _ma_warning("Wind", 2, ["Var"])]
+    http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(200, json={"warnings": warnings})))
+    place = places.Place("Nîmes, Occitanie, FR", 43.84, 4.36, country="FR", timezone="Europe/Paris",
+                         district="Gard")
+    r = report.alerts(place, None, "12h")
+    assert [a["event"] for a in r["alerts"]] == ["Rain warning"]
+    assert r["alerts"][0]["regions"][0] == "Gard" and r["alerts"][0]["matched_by"] == "region name"
+    assert "Rain warning" in r["card"]
+
+
+def test_unknown_country_is_not_reported_as_clear():
+    place = places.Place("10.000, 20.000", 10.0, 20.0, country="TD")
+    r = report.alerts(place, None, "12h")
+    assert r["count"] == 0 and "⚠️" in r["card"] and "✅" not in r["card"]
 
 
 def test_expired_warnings_are_dropped():
@@ -69,3 +87,27 @@ def test_expired_warnings_are_dropped():
     warnings = [_ma_warning("Rain warning", 4, ["Bergen"])]
     http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(200, json={"warnings": warnings})))
     assert intl_alerts.europe("NO", 60.39, 5.32)["orange_and_red_in_country"] == []
+
+
+def test_one_mapped_warning_does_not_make_the_whole_country_exact():
+    nice = "43.6,7.1 43.6,7.4 43.8,7.4 43.8,7.1 43.6,7.1"
+    warnings = [_ma_warning("Coastal event", 2, ["Alpes-Maritimes coast"], polygon=nice),
+                _ma_warning("Rain-flood", 2, ["Haute-Corse"])]
+    http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(200, json={"warnings": warnings})))
+    bastia = places.Place("Bastia, Corsica, FR", 42.70, 9.45, country="FR", timezone="Europe/Paris",
+                          district="Upper Corsica")
+    r = report.alerts(bastia, None, "12h")
+    assert r["count"] == 0 and "✅" not in r["card"] and "⚠️" in r["card"]
+
+
+def test_a_quiet_country_is_clear():
+    http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(200, json={"warnings": []})))
+    r = report.alerts(places.Place("Oslo, NO", 59.91, 10.75, country="NO", timezone="Europe/Oslo"), None, "12h")
+    assert r["card"].startswith("✅") and not any(n.startswith("⚠️") for n in r["notes"])
+
+
+def test_area_names_match_whole_names_only():
+    names = [intl_alerts._area_key(n) for n in ("Madrid", "Comunidad de Madrid", "Berlin")]
+    assert not intl_alerts._names_in("Sierra de Madrid", names)
+    assert not intl_alerts._names_in("West Flanders", [intl_alerts._area_key("Flanders")])
+    assert intl_alerts._names_in("Stadt Berlin", names) and intl_alerts._names_in("Madrid", names)

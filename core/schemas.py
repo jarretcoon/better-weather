@@ -21,7 +21,7 @@ _UNITS = {
 WEATHER: dict[str, Any] = {
     "name": "weather",
     "description": (
-        "Current weather, the next hours, today's forecast and active alerts for a place. "
+        "Weather now, next hours, today and alerts for a place. "
         "Use this FIRST for any 'how's the weather', 'is it raining', 'do I need a jacket' question; "
         "it needs no arguments for the user's home. Reply with the returned `card` as-is (it's formatted "
         "for chat), plus one short line if useful; never leave out an alert."
@@ -36,7 +36,7 @@ WEATHER: dict[str, Any] = {
 FORECAST: dict[str, Any] = {
     "name": "weather_forecast",
     "description": (
-        "Hourly or daily weather forecast for a place, up to 16 days ahead. "
+        "Hourly or daily forecast for a place, up to 16 days. "
         "Use for 'this weekend', 'next week', 'hour by hour', 'when will the rain start'. "
         "US places use the official NWS forecast (with forecaster wording) and Open-Meteo past day 7. "
         "Reply with the returned `card` as-is."
@@ -59,7 +59,7 @@ FORECAST: dict[str, Any] = {
 ALERTS: dict[str, Any] = {
     "name": "weather_alerts",
     "description": (
-        "Official weather warnings, watches and advisories in effect, with full text. "
+        "Official weather warnings and watches, full text. "
         "US alerts come from the National Weather Service and include safety instructions. "
         "Use when the user asks about warnings, "
         "or when the weather tool reported an alert and they want details. Quote the instructions; "
@@ -79,10 +79,10 @@ ALERTS: dict[str, Any] = {
 SEVERE: dict[str, Any] = {
     "name": "weather_severe",
     "description": (
-        "Severe-storm risk for a place: the Storm Prediction Center outlook at that exact spot for "
-        "days 1-3 (Marginal..High), today's tornado/wind/hail odds, active watches and warnings, and "
-        "model instability for the next 48 hours. Use for 'any storms coming', 'tornado risk', "
-        "'is it a severe weather day'."
+        "Severe-storm risk: SPC outlook, watches and warnings. "
+        "The Storm Prediction Center outlook at that exact spot for days 1-3 (Marginal..High), today's "
+        "tornado/wind/hail odds, active watches and warnings, and model instability for 48 hours. "
+        "Use for 'any storms coming', 'tornado risk', 'is it a severe weather day'."
     ),
     "parameters": {
         "type": "object",
@@ -94,7 +94,7 @@ SEVERE: dict[str, Any] = {
 PLACES: dict[str, Any] = {
     "name": "weather_places",
     "description": (
-        "Show, save or remove the user's weather places, and set their home location. "
+        "Set home and save named weather places. "
         "Use when the user says where home is, or names a place to remember ('save work as Ankeny')."
     ),
     "parameters": {
@@ -134,9 +134,9 @@ RADAR: dict[str, Any] = {
 SATELLITE: dict[str, Any] = {
     "name": "weather_satellite",
     "description": (
-        "GOES weather satellite picture for a place in the US and nearby: clouds, storms, smoke, "
-        "still or animated. Returns a `media` line; put it on its own line in your reply so the chat "
-        "shows the image."
+        "Satellite picture of clouds, storms and smoke. "
+        "GOES imagery for the US and nearby, still or animated. Returns a `media` line; "
+        "put it on its own line in your reply so the chat shows the image."
     ),
     "parameters": {
         "type": "object",
@@ -154,8 +154,9 @@ SATELLITE: dict[str, Any] = {
 AIR: dict[str, Any] = {
     "name": "weather_air",
     "description": (
-        "Air quality (AQI, smoke/PM2.5, ozone), UV index and, in Europe, pollen for a place, now and "
-        "the worst hour in the next 24. Use for 'is the air ok', 'smoke', 'UV', 'pollen', "
+        "Air quality, smoke, UV and pollen for a place. "
+        "AQI with the main pollutant, PM2.5 smoke, ozone, UV and (Europe) pollen, now and the worst hour in "
+        "the next 24. Use for 'is the air ok', 'smoke', 'UV', 'pollen', "
         "'can I run outside'."
     ),
     "parameters": {
@@ -168,7 +169,8 @@ AIR: dict[str, Any] = {
 HISTORY: dict[str, Any] = {
     "name": "weather_history",
     "description": (
-        "Past weather for a place: highs, lows, rain and snow for a day or up to 31 days. "
+        "Past weather, normals and records for a place. "
+        "Highs, lows, rain and snow for a day or up to 31 days. "
         "US places use official station records, with the 1991-2020 normal and the record high and low "
         "for a single day. Use for 'how cold was it yesterday', 'was last March wet', "
         "'is this warmer than normal', 'record high today'."
@@ -213,7 +215,7 @@ DISCUSSION: dict[str, Any] = {
 BEST_TIME: dict[str, Any] = {
     "name": "weather_best_time",
     "description": (
-        "Finds the best hours in the next days for an outdoor activity. "
+        "Best hours for an outdoor activity in the next days. "
         "Activities: walk, run, bike, golf, mow, grill, outdoor (patio/picnic), car_wash (needs a dry day "
         "after) or stargazing (clear night). Use for 'when should I…', 'best time to…', 'good day to…'."
     ),
@@ -229,7 +231,7 @@ BEST_TIME: dict[str, Any] = {
 SCORECARD: dict[str, Any] = {
     "name": "weather_scorecard",
     "description": (
-        "Which forecast has been most accurate at the user's home lately. "
+        "Which forecast has been most accurate at home lately. "
         "Compares the NWS forecast with the GFS, ECMWF, ICON, GEM and blended models by average miss on "
         "highs and lows and rain yes/no, 1-3 days ahead. Learns daily on its own. "
         "Use for 'which forecast should I trust', 'who's been right'."

@@ -31,6 +31,7 @@ if str(TESTS) not in sys.path:
     sys.path.insert(0, str(TESTS))
 
 from better_weather.core import cache, clock, http, settings  # noqa: E402
+from better_weather.core.sources import nws  # noqa: E402
 from fixturekit import FIXTURES, replay_transport  # noqa: E402
 
 
@@ -44,6 +45,7 @@ def isolated(request: pytest.FixtureRequest):
     live = request.node.get_closest_marker("live") is not None
     settings.reset_for_tests()
     cache.use_memory_cache_for_tests()
+    nws.forget_failures()
     if live:
         http.set_transport_for_tests(None, no_sleep=False)
         clock.freeze_for_tests(None)

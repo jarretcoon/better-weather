@@ -1,12 +1,15 @@
 """Official alerts outside the US.
 
 Canada (Environment and Climate Change Canada, GeoMet): every alert carries its map area, so it is
-matched to the exact spot. Europe (MeteoAlarm, 38 countries): most countries list warnings by region
-name/code rather than shape, so answers give exact matches only where a shape exists (e.g. Norway,
-Sweden) and otherwise a country summary with the orange/red warnings and the regions they name."""
+matched to the exact spot. Europe (MeteoAlarm, 38 countries): warnings with a map area are matched to
+the spot; most countries list warnings by area name only, so those count when an area's name is the
+town, county or region itself. A spot is only "clear" when every active warning had a map area."""
 
 from __future__ import annotations
 
+import re
+import unicodedata
+from collections.abc import Iterable
 from typing import Any
 
 from .. import geo, http, units
@@ -98,8 +101,31 @@ def _polygon(text: str) -> dict[str, Any] | None:
     return {"type": "Polygon", "coordinates": [ring]} if len(ring) >= 3 else None
 
 
-def europe(country: str, lat: float, lon: float) -> dict[str, Any]:
+def _fold(text: Any) -> str:
+    plain = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode()
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", plain.lower()).split())
+
+
+_AREA_WORDS = {"kreis", "landkreis", "stadtkreis", "stadt", "city", "county", "province", "provincia", "region"}
+
+
+def _area_key(text: Any) -> str:
+    """'Stadt Berlin' / 'Kreis Pinneberg' / 'Paris (City)' -> 'berlin' / 'pinneberg' / 'paris'."""
+    return " ".join(w for w in _fold(text).split() if w not in _AREA_WORDS)
+
+
+def _names_in(area: str, names: list[str]) -> bool:
+    """Whole-name match only: 'Madrid' is not 'Sierra de Madrid', 'Flanders' is not 'West Flanders'."""
+    key = _area_key(area)
+    return bool(key) and key in names
+
+
+def europe(country: str, lat: float, lon: float, names: Iterable[str | None] = ()) -> dict[str, Any]:
+    """*names* (town, county/department, region) match warnings that list areas by name only."""
     slug = EU_SLUGS[country]
+    wanted = [n for n in (_area_key(x) for x in names) if len(n) >= 3]
+    named: list[dict[str, Any]] = []
+    unmapped = 0  # active warnings with no map area: a spot can't be called clear while any exist
     data = http.get_json(METEOALARM.format(slug=slug), ttl=10 * 60, max_stale=30 * 60).data or {}
     exact: list[dict[str, Any]] = []
     big: list[dict[str, Any]] = []
@@ -118,16 +144,25 @@ def europe(country: str, lat: float, lon: float) -> dict[str, Any]:
         counts[colour] = counts.get(colour, 0) + 1
         areas = info.get("area") or []
         has_shapes = has_shapes or any(a.get("polygon") for a in areas)
+        if not any(a.get("polygon") for a in areas):
+            unmapped += 1
+        descs = [str(a.get("areaDesc") or "") for a in areas]
+        hits = [d for d in descs if wanted and _names_in(d, wanted)]
         entry = {"event": info.get("event") or info.get("headline"), "level": colour,
                  "severity": info.get("severity"), "ends": info.get("expires"), "starts": info.get("onset"),
-                 "issued_by": info.get("senderName"), "regions": [a.get("areaDesc") for a in areas][:8]}
+                 "issued_by": info.get("senderName"),
+                 "regions": (hits + [d for d in descs if d not in hits])[:8]}
+        text = str(info.get("description") or "").strip()
+        full = {**entry, "headline": info.get("headline"), "description": text[:TEXT_LIMIT],
+                "instruction": str(info.get("instruction") or "").strip()}
         if any(geo.contains(_polygon(poly), lon, lat) for a in areas for poly in (a.get("polygon") or [])):
-            text = str(info.get("description") or "").strip()
-            exact.append({**entry, "headline": info.get("headline"),
-                          "description": text[:TEXT_LIMIT], "instruction": str(info.get("instruction") or "").strip()})
+            exact.append(full)
+        elif hits and not any(a.get("polygon") for a in areas):
+            named.append({**full, "matched_by": "region name"})
         elif rank >= 3:
             big.append(entry)
     big.sort(key=lambda e: 0 if e["level"] == "red" else 1)
-    return {"exact_matches": exact, "orange_and_red_in_country": big[:12], "country_counts": counts,
-            "has_shapes": has_shapes,
+    return {"exact_matches": exact, "region_name_matches": named, "orange_and_red_in_country": big[:12],
+            "country_counts": counts,
+            "has_shapes": has_shapes, "exact": unmapped == 0,
             "country": slug.replace("-", " ").title(), "source": "MeteoAlarm (EUMETNET)"}

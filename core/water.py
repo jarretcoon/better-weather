@@ -4,7 +4,7 @@ CO-OPS) and waves (Open-Meteo marine). Each part only appears where it applies."
 from __future__ import annotations
 
 import math
-from datetime import timedelta
+from datetime import UTC, timedelta
 from typing import Any
 
 from . import http, units
@@ -89,8 +89,9 @@ def tides(place: Place, clock: str) -> dict[str, Any] | None:
     if best is None:
         return None
     station = best[1]
-    data = http.get_json(TIDES, {"product": "predictions", "station": station["id"], "date": "today", "range": 48,
-                                 "datum": "MLLW", "units": "english", "time_zone": "lst_ldt", "interval": "hilo",
+    start = (now_utc() - timedelta(hours=1)).strftime("%Y%m%d %H:00")  # GMT; "date=today" ignores range
+    data = http.get_json(TIDES, {"product": "predictions", "station": station["id"], "begin_date": start, "range": 48,
+                                 "datum": "MLLW", "units": "english", "time_zone": "gmt", "interval": "hilo",
                                  "format": "json", "application": "better-weather"},
                          ttl=6 * 3600, max_stale=24 * 3600).data or {}
     tz = units.zone(place.timezone)
@@ -100,7 +101,7 @@ def tides(place: Place, clock: str) -> dict[str, Any] | None:
         dt = units.parse_time(str(p.get("t", "")).replace(" ", "T"))
         if dt is None:
             continue
-        dt = dt.replace(tzinfo=tz)
+        dt = dt.replace(tzinfo=UTC).astimezone(tz)  # asked in GMT: the station's own zone isn't known here
         if dt < now - timedelta(hours=1):
             continue
         out.append({"time": units.day_clock(dt, clock, now), "type": "high" if p.get("type") == "H" else "low",

@@ -28,6 +28,14 @@ def _round(value: float, places: int = 2) -> float:
     return round(float(value), places)
 
 
+def timezone_at(lat: float, lon: float) -> str | None:
+    """IANA timezone for a spot (no weather data, cached a month)."""
+    data = http.get_json(FORECAST_URL, {"latitude": _round(lat), "longitude": _round(lon), "timezone": "auto",
+                                        "forecast_days": 1}, ttl=30 * 24 * 3600, max_stale=365 * 24 * 3600).data
+    tz = (data or {}).get("timezone") if isinstance(data, dict) else None
+    return str(tz) if tz else None
+
+
 def forecast(lat: float, lon: float, days: int = 7, past_days: int = 0) -> http.Fetched:
     """Current, hourly and daily data. Always fetched in metric (°C, km/h, mm) and converted
     for display, so one cached copy serves both unit settings."""
