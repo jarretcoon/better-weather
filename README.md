@@ -42,6 +42,14 @@ Places can be a name ("Des Moines, IA", "Paris, France"), a US ZIP code, an airp
 `/weather hourly`, `/weather alerts`, `/weather severe`, `/weather radar [loop]`,
 `/weather satellite [loop]`, `/weather air`, `/weather history [date]`, each optionally followed by a place.
 
+## Hermes Desktop chip
+
+The package also ships a small Hermes Desktop status-bar item (`desktop/plugin.js`) showing home's
+temperature and any active alert (🚨 for life-threatening ones). Click it for the full brief. It's
+off by default: turn it on in Desktop under **Capabilities → Plugins → Better Weather**. Its data
+comes from the plugin's own backend route (`dashboard/plugin_api.py`, `GET /api/plugins/better-weather/now`),
+refreshed every 10 minutes.
+
 ## Warning pushes (zero tokens)
 
 A Hermes cron job in no-agent mode runs a tiny script every 2 minutes. It prints, and so messages
