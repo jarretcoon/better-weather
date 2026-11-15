@@ -32,6 +32,10 @@ same on macOS, Windows and Linux.
 | `weather_water` | River levels vs flood stage (US), tide times (US coasts) and waves (coasts and big lakes). |
 | `weather_science` | Storm science from a model sounding (GFS or HRRR): CAPE/CIN, ECAPE, shear, helicity, STP/SCP, with a plain reading. |
 
+`weather`, `weather_forecast` and `weather_alerts` also return a `card`: a compact, emoji-formatted
+block (no tables) that reads well in Telegram, the Desktop app and the terminal, and that the agent
+sends as-is. `/weather` replies use the same cards.
+
 Pictures come back as `MEDIA:/path` lines, which Hermes sends as real images in Telegram and shows
 inline in the Desktop app.
 

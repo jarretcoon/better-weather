@@ -107,7 +107,7 @@ def test_handlers_never_raise(home, monkeypatch):
 
 
 def test_slash_command_works_without_ai(home):
-    assert commands.slash_command("").startswith("Des Moines, IA")
+    assert commands.slash_command("").startswith("**Des Moines, IA**")
     assert "forecast" in commands.slash_command("forecast")
     assert commands.slash_command("help") == commands.USAGE
 
@@ -178,3 +178,26 @@ def test_numpy_is_not_loaded_just_by_loading_the_plugin():
     )
     out = subprocess.run([sys.executable, "-I", "-c", code, str(ROOT)], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
+
+
+
+def test_chat_cards_are_compact_and_table_free(home):
+    now = call("weather")
+    card = now["card"]
+    assert card.startswith("**Des Moines, IA** · ") and "|" not in card
+    assert ("✅ No alerts" in card) or ("⚠️" in card) or ("🚨" in card)
+    assert "_daylight" not in now and all("_day" not in h for h in now.get("next_hours", []))
+    daily = call("weather_forecast", days=9)["card"]
+    assert daily.splitlines()[0] == "**Des Moines, IA** · forecast" and len(daily.splitlines()) <= 12
+    hourly = call("weather_forecast", hourly=True, hours=24)["card"]
+    assert len(hourly.splitlines()) == 13  # header + every 2nd hour of 24
+
+
+def test_icons():
+    from better_weather.core import display
+
+    assert display.icon("Chance Showers And Thunderstorms") == "⛈️"
+    assert display.icon("Mostly Clear", is_day=False) == "🌙"
+    assert display.icon("Patchy Fog") == "🌫️"
+    assert display.icon("Light Snow Likely") == "🌨️"
+    assert display.icon("Sunny") == "☀️"

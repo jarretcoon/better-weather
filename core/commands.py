@@ -57,12 +57,12 @@ def run(raw_args: str) -> str:
         if sub in {"help", "-h", "--help", "?"}:
             return USAGE
         if sub == "forecast":
-            return _forecast_text(report.forecast(places.resolve(rest), s.units, s.clock, days=7))
+            return report.forecast(places.resolve(rest), s.units, s.clock, days=7)["card"]
         if sub == "hourly":
-            return _forecast_text(report.forecast(places.resolve(rest), s.units, s.clock,
-                                                  hourly=True, hours=12))
+            return report.forecast(places.resolve(rest), s.units, s.clock, hourly=True, hours=12)["card"]
         if sub == "alerts":
-            return _alerts_text(report.alerts(places.resolve(rest), None, s.clock))
+            r = report.alerts(places.resolve(rest), None, s.clock)
+            return r.get("card") or _alerts_text(r)
         if sub == "severe":
             r = report.severe(places.resolve(rest), s.units, s.clock)
             return f"{r['place']['name']} severe weather\n{r.get('summary', '')}"
@@ -87,7 +87,7 @@ def run(raw_args: str) -> str:
             except ValueError as exc:
                 return str(exc)
             return _history_text(r)
-        return report.now(places.resolve(raw_args), s.units, s.clock)["summary"]
+        return report.now(places.resolve(raw_args), s.units, s.clock)["card"]
     except places.PlaceError as exc:
         return f"{exc}" + (f"\n{exc.hint}" if exc.hint else "") + f"\nUsage: {USAGE}"
     except http.FetchError as exc:
