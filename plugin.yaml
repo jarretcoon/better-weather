@@ -1,5 +1,5 @@
 name: better-weather
-version: 0.3.0
+version: 0.4.0
 manifest_version: 2
 api_version: 1
 description: >
@@ -24,6 +24,8 @@ provides_tools:
   - weather_discussion
   - weather_best_time
   - weather_scorecard
+  - weather_travel
+  - weather_water
 provides_hooks: []
 config_schema:
   home:

@@ -64,3 +64,11 @@ def test_live_confidence_discussion_best_time():
     assert disc.get("sections"), disc
     best = _call("weather_best_time", activity="walk")
     assert "best_windows" in best, best
+
+
+def test_live_travel_and_water():
+    settings.current().set("home", "Des Moines, IA")
+    trip = _call("weather_travel", airport="DSM")
+    assert trip["airport"]["now"].get("flight_category"), trip
+    river = _call("weather_water")
+    assert "rivers" in river, river

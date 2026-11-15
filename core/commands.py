@@ -201,6 +201,8 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
                             ("air", "Air quality and UV"), ("history", "Past weather: DATE [place]")):
         sp = subs.add_parser(name, help=help_text)
         sp.add_argument("place", nargs="*", help="Place (default: home)")
+    card = subs.add_parser("scorecard", help="Forecast scorecard for home (add 'update' to collect/check now)")
+    card.add_argument("action", nargs="?", choices=["show", "update"], default="show")
     subs.add_parser("doctor", help="Check every weather source and the settings")
     subs.add_parser("clear-cache", help="Forget cached responses")
     push = subs.add_parser("push", help="Zero-token warning pushes to your chat")
@@ -230,6 +232,18 @@ def handle_cli(args: argparse.Namespace) -> int:
         return 0
     if command == "push":
         return _push_cli(args)
+    if command == "scorecard":
+        from . import scorecard
+
+        try:
+            home = places.resolve("home")
+        except places.PlaceError as exc:
+            print(f"{exc} {exc.hint}".strip())
+            return 1
+        if getattr(args, "action", "show") == "update":
+            print(scorecard.update(home))
+        print(json.dumps(scorecard.report(home, settings.current().units), indent=2, default=str))
+        return 0
     place = " ".join(getattr(args, "place", None) or [])
     prefix = "" if command == "now" else command + " "
     print(run(prefix + place))

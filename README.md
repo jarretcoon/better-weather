@@ -28,6 +28,8 @@ same on macOS, Windows and Linux.
 | `weather_discussion` | The NWS forecasters' own write-up (key messages, reasoning, uncertainty) for a US place. |
 | `weather_best_time` | Best hours for walk, run, bike, golf, mow, grill, outdoor, car wash or stargazing. |
 | `weather_scorecard` | Which forecast (NWS or GFS/ECMWF/ICON/GEM/blend) has been most accurate at home; learns daily. |
+| `weather_travel` | Airport conditions, forecast and FAA delays/closures, or weather at a destination when you arrive. |
+| `weather_water` | River levels vs flood stage (US), tide times (US coasts) and waves (coasts and big lakes). |
 
 Pictures come back as `MEDIA:/path` lines, which Hermes sends as real images in Telegram and shows
 inline in the Desktop app.
@@ -63,7 +65,8 @@ when it's back. Scheduled AI briefs are blueprints: `/blueprint better-weather:m
 `better-weather:week-ahead`, `better-weather:weekend-plan`.
 
 **Terminal:** `hermes better-weather now|forecast|hourly|alerts|severe|radar|satellite|air|history [place]`,
-`hermes better-weather doctor` (checks every source), `hermes better-weather clear-cache`.
+`hermes better-weather doctor` (checks every source), `hermes better-weather scorecard [update]`,
+`hermes better-weather clear-cache`.
 
 ## Install
 
