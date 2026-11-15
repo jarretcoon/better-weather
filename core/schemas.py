@@ -185,4 +185,58 @@ HISTORY: dict[str, Any] = {
     },
 }
 
-ALL = (WEATHER, FORECAST, ALERTS, SEVERE, PLACES, RADAR, SATELLITE, AIR, HISTORY)
+CONFIDENCE: dict[str, Any] = {
+    "name": "weather_confidence",
+    "description": (
+        "How sure the forecast is, from 80+ model runs. "
+        "Gives the odds of rain or snow (and of big amounts) and the likely range of highs and lows for each "
+        "of the next days. Use for 'how sure are they', 'will it "
+        "really snow', 'how much rain could we get', or before giving a confident answer about days 3+."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "location": _LOCATION,
+        "days": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Days ahead (default 7)."},
+        "units": _UNITS}, "required": []},
+}
+
+DISCUSSION: dict[str, Any] = {
+    "name": "weather_discussion",
+    "description": (
+        "The NWS forecasters' own written discussion for a US place. "
+        "Key messages, the reasoning behind the forecast and its uncertainty. Use for 'why', 'what are they thinking', "
+        "'how confident is the weather service'. Summarize it in plain words."
+    ),
+    "parameters": {"type": "object", "properties": {"location": _LOCATION}, "required": []},
+}
+
+BEST_TIME: dict[str, Any] = {
+    "name": "weather_best_time",
+    "description": (
+        "Finds the best hours in the next days for an outdoor activity. "
+        "Activities: walk, run, bike, golf, mow, grill, outdoor (patio/picnic), car_wash (needs a dry day "
+        "after) or stargazing (clear night). Use for 'when should I…', 'best time to…', 'good day to…'."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "activity": {"type": "string",
+                     "description": "walk, run, bike, golf, mow, grill, outdoor, car_wash or stargazing "
+                                    "(close words like 'jog' or 'bbq' work too)."},
+        "location": _LOCATION,
+        "days": {"type": "integer", "minimum": 1, "maximum": 7, "description": "How many days to look (default 3)."},
+        "units": _UNITS}, "required": ["activity"]},
+}
+
+SCORECARD: dict[str, Any] = {
+    "name": "weather_scorecard",
+    "description": (
+        "Which forecast has been most accurate at the user's home lately. "
+        "Compares the NWS forecast with the GFS, ECMWF, ICON, GEM and blended models by average miss on "
+        "highs and lows and rain yes/no, 1-3 days ahead. Learns daily on its own. "
+        "Use for 'which forecast should I trust', 'who's been right'."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "days": {"type": "integer", "minimum": 7, "maximum": 365, "description": "Look-back window (default 30)."},
+        "units": _UNITS}, "required": []},
+}
+
+ALL = (WEATHER, FORECAST, ALERTS, SEVERE, PLACES, RADAR, SATELLITE, AIR, HISTORY, CONFIDENCE, DISCUSSION,
+       BEST_TIME, SCORECARD)

@@ -54,3 +54,13 @@ def test_live_air_and_history():
     assert air.get("air_quality", {}).get("index") is not None, air
     hist = _call("weather_history", date="2025-07-04")
     assert hist["days"] and hist["normals_and_records"]["record_high"], hist
+
+
+def test_live_confidence_discussion_best_time():
+    settings.current().set("home", "Des Moines, IA")
+    conf = _call("weather_confidence", days=3)
+    assert conf["days"] and conf["days"][0]["runs"] >= 30, conf
+    disc = _call("weather_discussion")
+    assert disc.get("sections"), disc
+    best = _call("weather_best_time", activity="walk")
+    assert "best_windows" in best, best
