@@ -15,7 +15,7 @@ from typing import Any, TypeVar
 from . import http, units
 from .clock import now_utc
 from .places import Place
-from .sources import nws, openmeteo, spc
+from .sources import intl_alerts, nws, openmeteo, spc
 
 T = TypeVar("T")
 
@@ -236,6 +236,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
     metric = units_ == "metric"
 
     om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
+    intl_job = _Job("Official alerts", _intl_alerts, place, clock) if not point and not place.maybe_us else None
     obs_job = fc_job = hr_job = al_job = None
     if point:
         obs_job = _Job("NWS observation", nws.latest_observation, point)
@@ -326,7 +327,20 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
     elif point:
         notes.append("⚠️ Alerts could not be checked right now — don't assume there are none")
     else:
-        notes.append("Official alerts are only checked for US locations so far")
+        intl = intl_job.result(notes) if intl_job else None
+        if intl is None and intl_job is not None:
+            notes.append("⚠️ Official alerts could not be checked — don't assume there are none")
+        if intl:
+            alerts = [{"event": a.get("event"), "severity": a.get("severity"), "ends": None,
+                       "headline": a.get("headline"), "life_threatening": a.get("life_threatening")}
+                      for a in intl.get("alerts") or []]
+            if intl.get("source"):
+                sources.append(str(intl["source"]))
+            big = intl.get("orange_and_red_in_country") or []
+            if big:
+                notes.append(f"{len(big)} orange/red warning(s) elsewhere in the country or region; "
+                             "weather_alerts lists which regions they name")
+            notes.extend(n for n in intl.get("notes") or [] if n.startswith("Official alerts"))
 
     daily = ((om.data if om else None) or {}).get("daily") or {}
     sun = {}
@@ -449,9 +463,7 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
         raise ValueError("alerts() needs a place or an area")
     else:
         if not place.maybe_us:
-            return {"place": place.public(), "count": 0, "alerts": [], "notes": [
-                "Official alerts are only available for US locations so far "
-                "(Europe and Canada are planned). Check the national weather service there."]}
+            return _intl_alerts(place, clock)
         lookup_notes: list[str] = []
         point = _nws_point(place, lookup_notes)
         if point is None and not lookup_notes:
@@ -482,6 +494,40 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     if not items:
         result["summary"] = f"No active NWS alerts for {label}."
     return _clean(result) | {"count": len(items), "alerts": result["alerts"]}
+
+
+def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
+    fmt = _Fmt("us", clock, units.zone(place.timezone))
+    country = (place.country or "").upper()
+    if country == "CA":
+        items = intl_alerts.canada(place.lat, place.lon)
+        for a in items:
+            for key in ("starts", "ends", "next_update_by"):
+                a[key] = fmt.at(a.get(key))
+        out = {"where": place.name, "place": place.public(), "count": len(items), "alerts": [_clean(a) for a in items],
+               "checked": units.clock(fmt.now, fmt.clock), "source": "Environment and Climate Change Canada"}
+        if not items:
+            out["summary"] = f"No active Environment Canada alerts for {place.name}."
+        return out
+    if country in intl_alerts.EU_SLUGS:
+        eu = intl_alerts.europe(country, place.lat, place.lon)
+        for group in ("exact_matches", "orange_and_red_in_country"):
+            for a in eu[group]:
+                a["starts"], a["ends"] = fmt.at(a.get("starts")), fmt.at(a.get("ends"))
+        notes = []
+        if not eu["exact_matches"] and eu.get("has_shapes"):
+            notes.append(f"No active warning in {eu['country']} covers this exact spot.")
+        elif not eu["exact_matches"]:
+            notes.append(f"MeteoAlarm lists {eu['country']}'s warnings by region name, not map shape, so this "
+                         "can't confirm which apply to this exact spot. Check whether the region is named below.")
+        return {"where": place.name, "place": place.public(), "count": len(eu["exact_matches"]),
+                "alerts": [_clean(a) for a in eu["exact_matches"]],
+                "orange_and_red_in_country": [_clean(a) for a in eu["orange_and_red_in_country"]],
+                "country_counts": eu["country_counts"], "checked": units.clock(fmt.now, fmt.clock),
+                "source": eu["source"], "notes": notes}
+    return {"place": place.public(), "count": 0, "alerts": [], "notes": [
+        "Official alerts are available for the US, Canada and 38 European countries so far. "
+        "Check the national weather service there."]}
 
 
 def _offset_of_first_alert(data: Any) -> tzinfo:

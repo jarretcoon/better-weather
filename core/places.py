@@ -26,6 +26,11 @@ US_STATES = {
     "MP": "Northern Mariana Islands",
 }
 _STATE_NAMES = {v.lower(): k for k, v in US_STATES.items()}
+CA_PROVINCES = {
+    "AB": "Alberta", "BC": "British Columbia", "MB": "Manitoba", "NB": "New Brunswick",
+    "NL": "Newfoundland and Labrador", "NS": "Nova Scotia", "NT": "Northwest Territories", "NU": "Nunavut",
+    "ON": "Ontario", "PE": "Prince Edward Island", "QC": "Quebec", "SK": "Saskatchewan", "YT": "Yukon",
+}
 _COUNTRY_ALIASES = {
     "usa": "US", "us": "US", "u.s.": "US", "u.s.a.": "US", "united states": "US", "america": "US",
     "uk": "GB", "u.k.": "GB", "england": "GB", "scotland": "GB", "wales": "GB", "britain": "GB",
@@ -98,6 +103,8 @@ def _matches(result: dict[str, Any], qualifier: str) -> bool:
     country_name = str(result.get("country") or "").lower()
     if q.upper() in US_STATES and len(q) == 2:
         return country == "US" and admin1 == US_STATES[q.upper()].lower()
+    if q.upper() in CA_PROVINCES and len(q) == 2:
+        return country == "CA" and admin1 == CA_PROVINCES[q.upper()].lower()
     if q in _STATE_NAMES:
         return country == "US" and admin1 == q
     if q in _COUNTRY_ALIASES:

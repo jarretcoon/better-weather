@@ -17,7 +17,7 @@ same on macOS, Windows and Linux.
 |---|---|
 | `weather` | Now, the next hours, today/tonight, and any active alerts. No arguments = home. |
 | `weather_forecast` | Daily (up to 16 days) or hourly (up to 72 hours). |
-| `weather_alerts` | Official warnings, watches and advisories with full text and instructions (US). |
+| `weather_alerts` | Official warnings with full text: US (NWS) and Canada matched to your exact spot; 38 European countries via MeteoAlarm. |
 | `weather_severe` | Storm Prediction Center risk at your exact spot (days 1–3), today's tornado/wind/hail odds, watches/warnings, model instability. |
 | `weather_places` | Set home, save named places ("work", "mom"), list or remove them. |
 | `weather_radar` | Radar picture (US): local, regional or national, still or animated, warning boxes drawn in. |
