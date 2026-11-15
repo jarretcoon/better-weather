@@ -3,8 +3,8 @@
 A reliable weather plugin for [Hermes Agent](https://hermes-agent.nousresearch.com) that works the
 same on macOS, Windows and Linux.
 
-- **Pure Python, nothing to compile.** Only `httpx` (already part of Hermes) and, on Windows,
-  `tzdata`. Works on every Python Hermes supports (3.11 and up), Intel and ARM.
+- **Pure Python, nothing to compile.** Only `httpx` and `numpy` (both already part of Hermes) and,
+  on Windows, `tzdata`. Works on every Python Hermes supports (3.11 and up), Intel and ARM.
 - **Free sources, no keys, no accounts:** the US National Weather Service, Open-Meteo (worldwide),
   the NOAA Storm Prediction Center, NOAA GOES satellites, NOAA's ACIS climate records and the Iowa
   Environmental Mesonet.
@@ -30,6 +30,7 @@ same on macOS, Windows and Linux.
 | `weather_scorecard` | Which forecast (NWS or GFS/ECMWF/ICON/GEM/blend) has been most accurate at home; learns daily. |
 | `weather_travel` | Airport conditions, forecast and FAA delays/closures, or weather at a destination when you arrive. |
 | `weather_water` | River levels vs flood stage (US), tide times (US coasts) and waves (coasts and big lakes). |
+| `weather_science` | Storm science from a model sounding (GFS or HRRR): CAPE/CIN, ECAPE, shear, helicity, STP/SCP, with a plain reading. |
 
 Pictures come back as `MEDIA:/path` lines, which Hermes sends as real images in Telegram and shows
 inline in the Desktop app.
@@ -103,6 +104,14 @@ agent where home is.
 
 No accounts or keys. Coordinates are sent rounded (3 decimals, about 100 m, to the NWS; 2 decimals,
 about 1 km, to Open-Meteo). Home and saved places stay in your own Hermes config and plugin state.
+
+## Storm science accuracy
+
+`weather_science` is plain numpy. Its parcel math (Romps LCL, virtual-temperature CAPE/CIN between
+the lowest LFC and highest EL), Bunkers storm motion, helicity, shear and precipitable water follow
+MetPy 1.7, and ECAPE follows the reference implementation of Peters et al. (2023). The test suite
+checks it against values those packages produced for three soundings (a classic supercell sounding
+and two real GFS profiles): CAPE and ECAPE within 3%, the rest within about 1%.
 
 ## Development
 

@@ -72,3 +72,9 @@ def test_live_travel_and_water():
     assert trip["airport"]["now"].get("flight_category"), trip
     river = _call("weather_water")
     assert "rivers" in river, river
+
+
+def test_live_science():
+    settings.current().set("home", "Des Moines, IA")
+    r = _call("weather_science")
+    assert "error" not in r and r["parcels"]["surface_based"]["cape_jkg"] >= 0, r
