@@ -114,7 +114,7 @@ def test_slash_command_works_without_ai(home):
 
 class FakeCtx:
     def __init__(self):
-        self.tools, self.commands, self.cli, self.skills = {}, {}, {}, {}
+        self.tools, self.commands, self.cli, self.skills, self.blueprints = {}, {}, {}, {}, {}
         self.config, self.state_store = {}, {}
 
     def register_tool(self, name, toolset, schema, handler, **kw):
@@ -129,6 +129,11 @@ class FakeCtx:
     def register_skill(self, name, path, description="", frontmatter=None):
         self.skills[name] = path
 
+    def register_automation_blueprint(self, key, *, title, description, schedule_template, prompt_template,
+                                      category="general", slots=(), deliver_default="origin", skills=(), tags=()):
+        assert ":" not in key and "{place}" in prompt_template
+        self.blueprints[key] = schedule_template
+
     def get_config(self, key, default=None):
         return self.config.get(key, default)
 
@@ -141,6 +146,7 @@ def test_register_wires_everything_and_matches_manifest():
     better_weather.register(ctx)
     assert set(ctx.tools) == {s["name"] for s in schemas.ALL}
     assert "weather" in ctx.commands and "better-weather" in ctx.cli and "weather" in ctx.skills
+    assert len(ctx.tools) == 9 and set(ctx.blueprints) == {"morning-brief", "week-ahead", "weekend-plan"}
     manifest = (ROOT / "plugin.yaml").read_text(encoding="utf-8")
     block = manifest.split("provides_tools:")[1].split("provides_hooks:")[0]
     declared = set(re.findall(r"-\s+(\w+)", block))

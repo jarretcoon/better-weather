@@ -151,10 +151,10 @@ def _kind(event: str) -> int:
     return 4
 
 
-def alerts_at(lat: float, lon: float) -> http.Fetched:
+def alerts_at(lat: float, lon: float, *, ttl: float = http.TTL_ALERTS) -> http.Fetched:
     return http.get_json(f"{BASE}/alerts/active",
                          {"point": f"{_q(round(lat, 3))},{_q(round(lon, 3))}", "status": "actual"},
-                         ttl=http.TTL_ALERTS, max_stale=10 * 60)
+                         ttl=ttl, max_stale=10 * 60)
 
 
 def alerts_in_area(area: str) -> http.Fetched:
