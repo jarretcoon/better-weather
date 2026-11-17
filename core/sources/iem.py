@@ -10,6 +10,7 @@ statements). Only the products in effect now are kept: the spot's events joined 
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -22,17 +23,35 @@ LIMITS = ("The National Weather Service's alert service didn't answer, so these 
           "Mesonet's copy of its warnings, watches and advisories: special weather statements and the full text "
           "of each aren't in it.")
 TTL = 120
-_GONE = {"CAN", "EXP", "UPG"}   # an event's last action that ends it
-_LOOKBACK_DAYS = 45              # long-running warnings (river floods) were issued weeks ago
-# The VTEC office of the NWS offices outside the lower 48 (the mesonet calls every office K + its 3 letters).
-_OFFICE = {"AFC": "PAFC", "AFG": "PAFG", "AJK": "PAJK", "HFO": "PHFO", "GUM": "PGUM", "SJU": "TJSJ",
-           "PPG": "NSTU"}
+_GONE = {"CAN", "EXP", "UPG"}    # an event's last action that ends it (in every zone it covers)
+_LOOKBACK_DAYS = 45              # if the live list can't say how far back its oldest event goes
+_STALE_AFTER = timedelta(hours=2)  # newest update anywhere in the country older than this: the copy has stalled
+# Storm-based warnings drawn as polygons: the mesonet's by-point list matches them by county, so they need a hit in
+# its polygon lookup too — the NWS matches them by polygon. (Flood warnings stay matched by county: over-warning is
+# the safe side, and they don't flap.)
+_POLYGON = {("TO", "W"), ("SV", "W"), ("FF", "W"), ("EW", "W"), ("SQ", "W"), ("MA", "W"), ("DS", "W")}
+# The VTEC office of offices outside the lower 48, when the event's own link doesn't give it (the mesonet's links do;
+# its 3-letter ids don't always match: San Juan is JSJ there).
+_OFFICE = {"AFC": "PAFC", "AFG": "PAFG", "AJK": "PAJK", "HFO": "PHFO", "GUM": "PGUM", "SJU": "TJSJ", "JSJ": "TJSJ",
+           "AAQ": "PAAQ", "HEB": "PHEB", "PPG": "NSTU"}
+_LINK_WFO = re.compile(r"wfo=([A-Z]{4})")
 
 
-def office(wfo: str) -> str:
-    """The 4-letter office in the NWS's own VTEC codes for a 3-letter office id."""
+def office(wfo: str, link: str = "") -> str:
+    """The 4-letter office in the NWS's own VTEC codes: from the event's link, else from its 3-letter id."""
+    found = _LINK_WFO.search(link or "")
+    if found:
+        return found.group(1)
     wfo = str(wfo or "").upper()
     return _OFFICE.get(wfo, f"K{wfo}")
+
+
+def _year(link: str, issued: datetime | None) -> int | None:
+    """The event's VTEC year: from its link (its start time can fall in the next year), else its start."""
+    found = re.search(r"year=(\d{4})", link or "")
+    if found:
+        return int(found.group(1))
+    return issued.year if issued else None
 
 
 def _when(text: Any) -> datetime | None:
@@ -55,41 +74,57 @@ def is_copy(data: Any) -> bool:
 def alerts_at(lat: float, lon: float) -> http.Fetched:
     """The NWS alerts in effect at the spot, from the mesonet, as an api.weather.gov `alerts/active` answer.
 
-    Raises FetchError when it can't say — including an answer that doesn't look right (nothing in effect in the
-    whole country is never true) — so a caller never takes "couldn't check" for "no alerts"."""
+    Raises FetchError when it can't say — an answer that doesn't look right, a copy that has stalled, or a surprise in
+    it — so a caller never takes "couldn't check" for "no alerts"."""
+    try:
+        return _read(lat, lon)
+    except http.FetchError:
+        raise
+    except Exception as exc:   # a surprise in the mesonet's answer is "can't say", never a crash or "no alerts"
+        raise http.FetchError(BASE, f"the mesonet's answer couldn't be read ({type(exc).__name__})") from exc
+
+
+def _read(lat: float, lon: float) -> http.Fetched:
     now = now_utc()
-    spot = http.get_json(f"{BASE}/json/vtec_events_bypoint.py",
-                         {"lat": round(lat, 3), "lon": round(lon, 3),
-                          "sdate": (now - timedelta(days=_LOOKBACK_DAYS)).date().isoformat(),
-                          "edate": (now + timedelta(days=1)).date().isoformat()},
-                         ttl=TTL, max_stale=15 * 60)
     live = http.get_json(f"{BASE}/api/1/vtec/events_status.json", ttl=TTL, max_stale=15 * 60)
     rows = live.data.get("data") if isinstance(live.data, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise http.FetchError(live.url, "the mesonet's answer didn't look right")
+    newest = max((t for t in (_when(r.get("updated")) for r in rows if isinstance(r, dict)) if t), default=None)
+    if newest is None or now - newest > _STALE_AFTER:
+        raise http.FetchError(live.url, "the mesonet's copy hasn't been updated lately")
+    # in effect: any of an event's rows (one per group of zones) is still going
+    active = {(r.get("wfo"), r.get("phenomena"), r.get("significance"), r.get("eventid"), r.get("year"))
+              for r in rows if isinstance(r, dict) and str(r.get("status") or "") not in _GONE}
+    oldest = min((t for t in (_when(r.get("issue")) for r in rows if isinstance(r, dict)) if t),
+                 default=now - timedelta(days=_LOOKBACK_DAYS))
+    spot = http.get_json(f"{BASE}/json/vtec_events_bypoint.py",
+                         {"lat": round(lat, 3), "lon": round(lon, 3),
+                          "sdate": (min(oldest, now) - timedelta(days=1)).date().isoformat(),
+                          "edate": (now + timedelta(days=1)).date().isoformat()},
+                         ttl=TTL, max_stale=15 * 60)
     events = spot.data.get("events") if isinstance(spot.data, dict) else None
-    if not isinstance(rows, list) or not rows or not isinstance(events, list):
+    if not isinstance(events, list):
         raise http.FetchError(spot.url, "the mesonet's answer didn't look right")
-    status: dict[tuple[Any, ...], str] = {}
-    for r in rows:
-        if isinstance(r, dict):
-            status[(r.get("wfo"), r.get("phenomena"), r.get("significance"), r.get("eventid"), r.get("year"))] = \
-                str(r.get("status") or "")
+    in_polygon = _polygon_hits(lat, lon, now)
     features: dict[str, dict[str, Any]] = {}
     for e in events:
         if not isinstance(e, dict):
             continue
+        link = str(e.get("url") or "")
         issued, ends = _when(e.get("issue")), _when(e.get("expire"))
-        key = (e.get("wfo"), e.get("phenomena"), e.get("significance"), e.get("eventid"), issued and issued.year)
-        action = status.get(key)
-        if not action or action in _GONE or (ends and ends <= now):
+        year = _year(link, issued)
+        ph, sig, eid = e.get("phenomena"), e.get("significance"), e.get("eventid")
+        if (e.get("wfo"), ph, sig, eid, year) not in active or (ends and ends <= now):
             continue
-        try:
-            etn = int(str(e.get("eventid") or ""))
-        except (TypeError, ValueError):
-            continue
-        code = f"{office(str(e.get('wfo') or ''))}.{e.get('phenomena')}.{e.get('significance')}.{etn:04d}"
-        ident = f"iem:{code}.{issued.year if issued else ''}"
+        if (ph, sig) in _POLYGON and in_polygon is not None and (e.get("wfo"), ph, sig, eid, year) not in in_polygon:
+            continue   # a storm-based warning for this county, but its polygon misses the spot
+        etn = int(str(eid or ""))
+        code = f"{office(str(e.get('wfo') or ''), link)}.{ph}.{sig}.{etn:04d}"
+        ident = f"iem:{code}.{year}"
         name = str(e.get("name") or "Alert")
-        web = f"{BASE}{e.get('url') or '/vtec/'}"
+        web = f"{BASE}{link or '/vtec/'}"
+        action = "NEW" if issued and now - issued < timedelta(minutes=15) else "CON"
         features[ident] = {"geometry": None, "properties": {
             "id": ident,
             "event": name,
@@ -111,3 +146,25 @@ def alerts_at(lat: float, lon: float) -> http.Fetched:
     fetched_at = min(spot.fetched_at, live.fetched_at) if stale else max(spot.fetched_at, live.fetched_at)
     data = {"type": "FeatureCollection", "features": list(features.values()), "_source": SOURCE, "_limits": LIMITS}
     return http.Fetched(data, spot.url, fetched_at, stale, 200)
+
+
+def _polygon_hits(lat: float, lon: float, now: datetime) -> set[tuple[Any, ...]] | None:
+    """The storm-based warnings whose polygon covers the spot (None if the lookup failed: county matching then,
+    which can over-warn but never misses one)."""
+    try:
+        found = http.get_json(f"{BASE}/json/sbw_by_point.py",
+                              {"lat": round(lat, 3), "lon": round(lon, 3),
+                               "sdate": (now - timedelta(days=2)).date().isoformat(),
+                               "edate": (now + timedelta(days=1)).date().isoformat()},
+                              ttl=TTL, max_stale=15 * 60)
+    except http.FetchError:
+        return None
+    hits = found.data.get("sbws") if isinstance(found.data, dict) else None
+    if not isinstance(hits, list):
+        return None
+    out = set()
+    for h in hits:
+        if isinstance(h, dict):
+            out.add((h.get("wfo"), h.get("phenomena"), h.get("significance"), h.get("eventid"),
+                     _year(str(h.get("url") or ""), _when(h.get("issue")))))
+    return out

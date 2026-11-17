@@ -188,11 +188,12 @@ def alerts_at(lat: float, lon: float, *, ttl: float = http.TTL_ALERTS, backup: b
             return iem.alerts_at(lat, lon)
         except http.FetchError as backup_exc:
             raise exc from backup_exc
-    if fetched.stale and backup:   # a fresh copy beats a saved answer for warnings
+    if fetched.stale and backup:   # a fresh copy beats a saved answer (a saved copy doesn't: it lacks the texts)
         try:
-            return iem.alerts_at(lat, lon)
+            copy = iem.alerts_at(lat, lon)
         except http.FetchError:
             return fetched
+        return fetched if copy.stale else copy
     return fetched
 
 

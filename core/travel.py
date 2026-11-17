@@ -12,7 +12,7 @@ from typing import Any
 from . import http, units
 from .clock import now_utc
 from .places import Place
-from .sources import nws, openmeteo
+from .sources import iem, nws, openmeteo
 
 AWC = "https://aviationweather.gov/api/data"
 FAA_STATUS = "https://nasstatus.faa.gov/api/airport-status-information"
@@ -219,8 +219,10 @@ def arrival(place: Place, arrive: str | None, units_: str, clock: str) -> dict[s
     }
     if place.maybe_us:
         try:
-            alerts = nws.normalize_alerts(nws.alerts_at(place.lat, place.lon).data)
-            result["alerts_there_now"] = [a["event"] for a in alerts]
+            fetched = nws.alerts_at(place.lat, place.lon)
+            result["alerts_there_now"] = [a["event"] for a in nws.normalize_alerts(fetched.data)]
+            if iem.is_copy(fetched.data):
+                result["notes"] = [iem.LIMITS]
         except http.FetchError:
             result["notes"] = ["Couldn't check alerts at the destination"]
     return result
