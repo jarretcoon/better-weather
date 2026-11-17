@@ -241,3 +241,33 @@ def test_a_surprise_in_the_copy_is_cant_say_not_a_crash(monkeypatch):
     monkeypatch.setattr(iem, "_read", broken)
     with pytest.raises(http.FetchError, match="couldn't be read"):
         iem.alerts_at(41.6, -93.61)
+
+
+
+def test_an_old_polygon_answer_never_hides_a_new_warning():
+    """The polygon lookup failing after an earlier answer: its saved copy (from before a new tornado warning) must not
+    filter that warning out, nor may a cached answer older than the event list it filters. County matching then."""
+    import time
+
+    window = {"lat": 41.6, "lon": -93.61, "sdate": "2026-11-01", "edate": "2026-11-18"}
+    http.set_transport_for_tests(serve(None, polygons=[]))
+    assert iem._polygon_hits(window, time.time() - 60) == set()     # a fresh answer, newer than the events: used
+    http.set_transport_for_tests(serve(None, polygons=None))        # the lookup fails now
+    assert iem._polygon_hits(window, time.time() + 1) is None        # older than the events, and asking again failed
+    assert iem._polygon_hits({**window, "lat": 40.0}, time.time()) is None   # never answered: county matching
+
+
+def test_the_polygon_lookup_covers_the_same_window_as_the_events():
+    log: list[str] = []
+    http.set_transport_for_tests(serve(None, rows=[ELSEWHERE, row("FF", "W", 4, issued_ago=80)], polygons=[], log=log))
+    nws.alerts_at(41.6, -93.61)
+    events = next(line for line in log if "bypoint" in line)
+    polygons = next(line for line in log if "sbw_by_point" in line)
+    sdate = next(p for p in events.split("?", 1)[1].split("&") if p.startswith("sdate="))
+    assert sdate in polygons and sdate == f"sdate={(clock.now_utc() - timedelta(hours=80 + 24)).date().isoformat()}"
+
+
+def test_one_odd_event_doesnt_cost_the_others():
+    spot = [{**ev("Wind Advisory", "WI", "Y", 9), "eventid": "x"}, ev("Winter Storm Warning", "WS", "W", 5)]
+    http.set_transport_for_tests(serve(None, spot=spot, rows=[ELSEWHERE, row("WI", "Y", "x"), row("WS", "W", 5)]))
+    assert [a["event"] for a in nws.normalize_alerts(nws.alerts_at(41.6, -93.61).data)] == ["Winter Storm Warning"]

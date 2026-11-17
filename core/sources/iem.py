@@ -98,15 +98,14 @@ def _read(lat: float, lon: float) -> http.Fetched:
               for r in rows if isinstance(r, dict) and str(r.get("status") or "") not in _GONE}
     oldest = min((t for t in (_when(r.get("issue")) for r in rows if isinstance(r, dict)) if t),
                  default=now - timedelta(days=_LOOKBACK_DAYS))
-    spot = http.get_json(f"{BASE}/json/vtec_events_bypoint.py",
-                         {"lat": round(lat, 3), "lon": round(lon, 3),
-                          "sdate": (min(oldest, now) - timedelta(days=1)).date().isoformat(),
-                          "edate": (now + timedelta(days=1)).date().isoformat()},
-                         ttl=TTL, max_stale=15 * 60)
+    window = {"lat": round(lat, 3), "lon": round(lon, 3),
+              "sdate": (min(oldest, now) - timedelta(days=1)).date().isoformat(),
+              "edate": (now + timedelta(days=1)).date().isoformat()}
+    spot = http.get_json(f"{BASE}/json/vtec_events_bypoint.py", window, ttl=TTL, max_stale=15 * 60)
     events = spot.data.get("events") if isinstance(spot.data, dict) else None
     if not isinstance(events, list):
         raise http.FetchError(spot.url, "the mesonet's answer didn't look right")
-    in_polygon = _polygon_hits(lat, lon, now)
+    in_polygon = _polygon_hits(window, spot.fetched_at)
     features: dict[str, dict[str, Any]] = {}
     for e in events:
         if not isinstance(e, dict):
@@ -119,7 +118,10 @@ def _read(lat: float, lon: float) -> http.Fetched:
             continue
         if (ph, sig) in _POLYGON and in_polygon is not None and (e.get("wfo"), ph, sig, eid, year) not in in_polygon:
             continue   # a storm-based warning for this county, but its polygon misses the spot
-        etn = int(str(eid or ""))
+        try:
+            etn = int(str(eid or ""))
+        except ValueError:
+            continue   # one odd event doesn't cost the others
         code = f"{office(str(e.get('wfo') or ''), link)}.{ph}.{sig}.{etn:04d}"
         ident = f"iem:{code}.{year}"
         name = str(e.get("name") or "Alert")
@@ -148,16 +150,18 @@ def _read(lat: float, lon: float) -> http.Fetched:
     return http.Fetched(data, spot.url, fetched_at, stale, 200)
 
 
-def _polygon_hits(lat: float, lon: float, now: datetime) -> set[tuple[Any, ...]] | None:
-    """The storm-based warnings whose polygon covers the spot (None if the lookup failed: county matching then,
-    which can over-warn but never misses one)."""
+def _polygon_hits(window: dict[str, Any], events_at: float) -> set[tuple[Any, ...]] | None:
+    """The storm-based warnings whose polygon covers the spot, over the same window as the events (None if the lookup
+    failed or only an old copy is left: county matching then, which can over-warn but never misses one). Never older
+    than the event list it filters: a warning newer than the polygons would be dropped."""
+    url = f"{BASE}/json/sbw_by_point.py"
     try:
-        found = http.get_json(f"{BASE}/json/sbw_by_point.py",
-                              {"lat": round(lat, 3), "lon": round(lon, 3),
-                               "sdate": (now - timedelta(days=2)).date().isoformat(),
-                               "edate": (now + timedelta(days=1)).date().isoformat()},
-                              ttl=TTL, max_stale=15 * 60)
+        found = http.get_json(url, window, ttl=TTL, max_stale=15 * 60)
+        if not found.stale and found.fetched_at < events_at:
+            found = http.get_json(url, window, ttl=0, max_stale=15 * 60)
     except http.FetchError:
+        return None
+    if found.stale:
         return None
     hits = found.data.get("sbws") if isinstance(found.data, dict) else None
     if not isinstance(hits, list):
