@@ -15,9 +15,12 @@ from typing import Any, TypeVar
 from . import display, http, units
 from .clock import now_utc
 from .places import Place
-from .sources import intl_alerts, nws, openmeteo, radar, spc
+from .sources import iem, intl_alerts, nws, openmeteo, radar, spc
 
 T = TypeVar("T")
+
+# (shown on a card under the alerts line when the NWS didn't answer and the mesonet's copy did: sources/iem.py)
+COPY_NOTE = "⚠️ The NWS didn't answer: alerts are from Iowa State's copy of its warnings (no full texts)"
 
 _pool: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
@@ -348,8 +351,10 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
     if al is not None:
         alerts = nws.normalize_alerts(al.data)
         alerts_checked = True
-        sources.append("NWS alerts")
+        sources.append(iem.SOURCE if iem.is_copy(al.data) else "NWS alerts")
         _stale_note("NWS alerts", al, notes)
+        if iem.is_copy(al.data):
+            notes.append(COPY_NOTE)
     elif intl_job is None:
         notes.append("⚠️ Alerts could not be checked right now — don't assume there are none")
     else:
@@ -491,8 +496,8 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
         "count": len(items),
         "alerts": [_clean(a) for a in items],
         "checked": units.clock(fmt.now, fmt.clock),
-        "source": "National Weather Service",
-        "notes": notes,
+        "source": iem.SOURCE if iem.is_copy(fetched.data) else "National Weather Service",
+        "notes": notes + ([iem.LIMITS] if iem.is_copy(fetched.data) else []),
     }
     if not items:
         result["summary"] = f"No active NWS alerts for {label}."
@@ -646,7 +651,8 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     result["notes"] = notes
     result["summary"] = severe_text(result, alerts_checked=al is not None)
     result["sources"] = [s for s in ("NOAA Storm Prediction Center" if risk else None,
-                                      "NWS alerts" if al is not None else None,
+                                      (iem.SOURCE if iem.is_copy(al.data) else "NWS alerts") if al is not None
+                                      else None,
                                       "Open-Meteo" if om is not None else None) if s]
     return _clean(result)
 

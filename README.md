@@ -173,7 +173,7 @@ agent where home is.
 | [Open-Meteo](https://open-meteo.com) | Worldwide forecasts, place search, ensembles, air quality, history (ERA5), marine | Free for **non-commercial** use; data under CC BY 4.0, "Weather data by Open-Meteo.com" |
 | [Environment and Climate Change Canada](https://weather.gc.ca) (GeoMet) | Canadian alerts | Open Government Licence – Canada |
 | [MeteoAlarm](https://www.meteoalarm.org) (EUMETNET) | Alerts in 38 European countries | MeteoAlarm terms of use |
-| [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu) | Backup radar pictures | Free public service |
+| [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu) | Backup radar pictures; backup copy of NWS warnings when the NWS alerts service is down | Free public service |
 
 Open-Meteo's free API is meant for personal, non-commercial use. Commercial use needs your own
 Open-Meteo plan, which this plugin doesn't support yet.

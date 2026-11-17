@@ -27,7 +27,7 @@ from typing import Any
 
 from . import http, units
 from .clock import now_utc
-from .sources import nws, openmeteo
+from .sources import iem, nws, openmeteo
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
     sent: dict[str, dict[str, Any]] = state.get("sent") or {}
 
     try:
-        fetched = nws.alerts_at(lat, lon, ttl=0)  # always ask the NWS fresh
+        fetched = nws.alerts_at(lat, lon, ttl=0)  # always ask the NWS fresh (else the mesonet's copy: iem.py)
         if fetched.stale:
             raise http.FetchError(fetched.url, "only a stale copy was available")
     except http.FetchError as exc:
@@ -143,8 +143,10 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
         state["sent"] = sent
         return "\n\n".join(messages), state
 
+    via_copy = iem.is_copy(fetched.data)   # the NWS didn't answer; the mesonet's copy of its warnings did
     if int(state.get("failures") or 0) >= FAIL_NOTICE_AFTER:
-        messages.append("✅ Alert checks are working again.")
+        messages.append("✅ Alert checks are working again" + (" (from Iowa State's copy of NWS warnings while "
+                                                               "the NWS is down)." if via_copy else "."))
     state["failures"] = 0
 
     raw_params = {str((f.get("properties") or {}).get("id")): (f.get("properties") or {}).get("parameters") or {}
@@ -167,7 +169,8 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
     for key, alert in current.items():
         previous = sent.get(key)
         if previous is None:
-            messages.append(_format_new(alert, place, fmt_time))
+            source = "\n(From Iowa State's copy of NWS warnings: the NWS didn't answer.)" if via_copy else ""
+            messages.append(_format_new(alert, place, fmt_time) + source)
             sent[key] = {"event": alert["event"], "ends": alert.get("ends"), "id": alert["id"],
                          "at": time.time(), "missed": 0}
             continue
@@ -185,6 +188,8 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
             continue
         entry = sent[key]
         reason = over.get(key)
+        if reason is None and via_copy and "|" in key:
+            continue   # not a VTEC product: the copy can't list it, so its absence says nothing
         if reason is None:  # just missing from this response: wait for a second miss before believing it
             entry["missed"] = int(entry.get("missed") or 0) + 1
             if entry["missed"] < MISSES_BEFORE_ENDED:

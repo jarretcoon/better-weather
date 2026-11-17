@@ -8,6 +8,7 @@ from typing import Any
 
 from .. import http, units
 from ..clock import now_utc
+from . import iem
 
 BASE = "https://api.weather.gov"
 
@@ -172,10 +173,28 @@ def _kind(event: str) -> int:
     return 4
 
 
-def alerts_at(lat: float, lon: float, *, ttl: float = http.TTL_ALERTS) -> http.Fetched:
-    return http.get_json(f"{BASE}/alerts/active",
-                         {"point": f"{_q(round(lat, 3))},{_q(round(lon, 3))}", "status": "actual"},
-                         ttl=ttl, max_stale=10 * 60)
+def alerts_at(lat: float, lon: float, *, ttl: float = http.TTL_ALERTS, backup: bool = True) -> http.Fetched:
+    """Active alerts at a spot. When the NWS doesn't answer — or only a saved copy of its answer is left — the
+    Iowa Environmental Mesonet's copy of its warnings (iem.py; `iem.is_copy(fetched.data)` says so), if that
+    answers; otherwise the NWS's error. The NWS is asked first every time, so it's back the moment it answers."""
+    try:
+        fetched = http.get_json(f"{BASE}/alerts/active",
+                                {"point": f"{_q(round(lat, 3))},{_q(round(lon, 3))}", "status": "actual"},
+                                ttl=ttl, max_stale=10 * 60)
+    except http.FetchError as exc:
+        if not backup:
+            raise
+        try:
+            return iem.alerts_at(lat, lon)
+        except http.FetchError as backup_exc:
+            raise exc from backup_exc
+    if fetched.stale and backup:   # a fresh copy beats a saved answer (a saved copy doesn't: it lacks the texts)
+        try:
+            copy = iem.alerts_at(lat, lon)
+        except http.FetchError:
+            return fetched
+        return fetched if copy.stale else copy
+    return fetched
 
 
 def alerts_in_area(area: str) -> http.Fetched:
