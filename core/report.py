@@ -9,10 +9,10 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import Any, TypeVar
 
-from . import display, http, units
+from . import astro, display, http, units
 from .clock import now_utc
 from .places import Place
 from .sources import iem, intl_alerts, nws, openmeteo, radar, spc
@@ -374,6 +374,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
     sun = {}
     if daily.get("sunrise"):
         sun = {"sunrise": fmt.at(daily["sunrise"][0]), "sunset": fmt.at((daily.get("sunset") or [None])[0])}
+    sky = _sky(place, fmt, daily)
 
     result = {
         "place": place.public(),
@@ -385,9 +386,18 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         "_next_hours": next_hours,
         "_sun": sun,
         "_alerts_checked": alerts_checked,
+        "_sky": sky,
         "sources": sources,
         "notes": notes,
     }
+    if sun.get("sunrise") and sun.get("sunset"):
+        result["sun"] = dict(sun)  # for the agent too, not only the card
+    if sky:
+        m = sky["moon"]
+        result["moon"] = {k: v for k, v in {"phase": m["phase"], "lit_pct": m["lit_pct"], "up_now": m["up"],
+                                            "sets": m.get("sets"), "rises": m.get("rises"),
+                                            "next": f"{m['next']['phase']} {m['next']['date']}"}.items()
+                          if v is not None}
     is_day = om_current.get("is_day")
     if is_day is not None:
         result["_daylight"] = bool(is_day)
@@ -395,6 +405,62 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         result["_daylight"] = None
     card = display.now_card(result)
     return display.card_first(display.strip_private(_clean(result)), card)
+
+
+def _sky(place: Place, fmt: _Fmt, daily: dict[str, Any]) -> dict[str, Any] | None:
+    """The now card's sun and moon: by day the sun's times and today's moon; by night the moon (its phase, when it
+    sets or rises) and the next sunrise. All worked out locally (core/astro.py), so it never fails a request."""
+    now = fmt.now
+    t = now.timestamp()
+    try:
+        lat, lon = float(place.lat), float(place.lon)
+    except (TypeError, ValueError):
+        return None
+
+    def at(ts: float) -> str:
+        return units.clock(datetime.fromtimestamp(ts, fmt.tz), fmt.clock)
+
+    def local(text: Any) -> datetime | None:
+        dt = units.parse_time(text)
+        return dt.replace(tzinfo=fmt.tz) if dt is not None and dt.tzinfo is None else dt
+
+    days = [(d, local(up), local(down)) for d, up, down in
+            zip(daily.get("time") or [], daily.get("sunrise") or [], daily.get("sunset") or [], strict=False)]
+    today = now.date()
+    day_start = datetime.combine(today, time(0), tzinfo=fmt.tz).timestamp()
+    day_end = datetime.combine(today + timedelta(days=1), time(0), tzinfo=fmt.tz).timestamp()
+    # Open-Meteo gives a day with no sunrise or sunset (far north or south) the same time for both
+    with_sun = [(d, up, down) for d, up, down in days if up is not None and down is not None and up != down]
+    todays = next(((up, down) for d, up, down in with_sun if d == today.isoformat()), None)
+    sun_up = todays[0] <= now < todays[1] if todays else astro.sun_altitude(t, lat, lon) > 0
+
+    _, lit = astro.moon_phase_at(t)
+    name = astro.moon_name(t, day_start, day_end)
+    moon: dict[str, Any] = {"phase": name, "emoji": astro.moon_emoji(name, lat), "lit_pct": round(lit * 100)}
+    # what the moon does next: up now and when it sets, or when it rises (or neither, far north or south)
+    p = astro.moon_pass(t, lat, lon)
+    rise, down = p["rise"], p["set"]
+    if p["up"]:
+        moon["up"] = True
+        moon["sets"] = at(float(down)) if isinstance(down, float) else None
+    else:
+        moon["up"] = False
+        moon["rises"] = at(float(rise)) if isinstance(rise, float) else None
+    full, new = astro.next_phase(t, 0.5), astro.next_phase(t, 0)
+    when = datetime.fromtimestamp(min(full, new), fmt.tz)
+    moon["next"] = {"phase": "Full moon" if full < new else "New moon", "emoji": "🌕" if full < new else "🌑",
+                    "date": f"{when:%a}, {when:%b} {when.day}"}
+    if sun_up:
+        return {"mode": "sun", "sunrise": at(todays[0].timestamp()) if todays else None,
+                "sunset": at(todays[1].timestamp()) if todays else None, "sun_all_day": todays is None,
+                "moon": moon}
+    next_sun = next((up for _d, up, _down in with_sun if up > now), None)
+    sun = None
+    if next_sun is not None:
+        sun = at(next_sun.timestamp())
+        if (next_sun.date() - today).days > 1:  # far north, after the polar night: say which day
+            sun = f"{next_sun:%a} {sun}"
+    return {"mode": "moon", "next_sunrise": sun, "moon": moon}
 
 
 # --- forecast ---------------------------------------------------------------------------------

@@ -17,7 +17,8 @@ AI token.
 > **Sunday** 🌤️ 51° high · Mostly Sunny
 >
 > ✅ No alerts\
-> 🌅 7:03 AM · 🌇 4:54 PM
+> 🌔 Waxing gibbous moon · 63% lit · rises 1:34 PM\
+> 🌅 Sunrise 7:03 AM · 🌕 Full moon Tue, Nov 24
 
 ### Things you can ask
 - "Do I need a jacket?" · "When does the rain start tomorrow?"
@@ -34,7 +35,9 @@ AI token.
 - **Never a false all-clear.** Warnings are matched to your exact spot. If they couldn't be checked
   (a service is down, or there's no official feed there), it says so instead of "no alerts".
 - **Made for chat.** Cards read well in Telegram, the Desktop app and the terminal; pictures arrive
-  as images; `/weather` answers instantly without the AI at all.
+  as images; `/weather` answers instantly without the AI at all. By day the card gives sunrise and
+  sunset; by night it leads with the moon (its phase, how much is lit, when it sets or rises) and the
+  next sunrise, worked out on your machine, no extra service.
 - **As deep as you want to go.** How sure the forecast is (80+ model runs), the forecasters' own
   reasoning, storm science (CAPE, shear, ECAPE), and a scorecard of which forecast has been right
   at your home.

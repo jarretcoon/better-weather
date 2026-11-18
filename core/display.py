@@ -105,10 +105,46 @@ def now_card(r: dict[str, Any]) -> str:
     elif not warnings:
         warnings = ["⚠️ Alerts weren't checked here"]
     lines.extend(warnings)
-    sun = r.get("_sun") or r.get("sun") or {}
-    if sun.get("sunrise") and sun.get("sunset"):
-        lines.append(f"🌅 {sun['sunrise']} · 🌇 {sun['sunset']}")
+    sky = r.get("_sky")
+    if sky:
+        lines.extend(sky_lines(sky))
+    else:
+        sun = r.get("_sun") or r.get("sun") or {}
+        if sun.get("sunrise") and sun.get("sunset"):
+            lines.append(f"🌅 Sunrise {sun['sunrise']} · 🌇 Sunset {sun['sunset']}")
     return "\n".join(lines).strip()
+
+
+def _moon_label(moon: dict[str, Any]) -> str:
+    name = str(moon.get("phase") or "Moon")
+    name = name if name.lower().endswith("moon") else f"{name} moon"
+    lit = moon.get("lit_pct")
+    # a new moon can't be seen: no "0% lit", no rise or set
+    return f"{moon.get('emoji', '🌙')} {name}" + (f" · {lit}% lit" if isinstance(lit, int) and lit >= 2 else "")
+
+
+def sky_lines(sky: dict[str, Any]) -> list[str]:
+    """Sun by day, moon by night, each emoji with its words: people don't know what a tiny 🌇 means."""
+    moon = sky.get("moon") or {}
+    visible = (moon.get("lit_pct") or 0) >= 2
+    if moon.get("up"):
+        status = f"up now, sets {moon['sets']}" if moon.get("sets") else "up all day"
+    else:
+        status = f"rises {moon['rises']}" if moon.get("rises") else "down all day"
+    moon_line = _moon_label(moon) + (f" · {status}" if visible else "")
+    if sky.get("mode") == "sun":
+        return ["☀️ Sun up all day" if sky.get("sun_all_day")
+                else f"🌅 Sunrise {sky.get('sunrise')} · 🌇 Sunset {sky.get('sunset')}", moon_line]
+    lines = [moon_line]
+    tail = []
+    if sky.get("next_sunrise"):
+        tail.append(f"🌅 Sunrise {sky['next_sunrise']}")
+    nxt = moon.get("next") or {}
+    if nxt.get("date") and nxt.get("phase") != moon.get("phase"):
+        tail.append(f"{nxt.get('emoji')} {nxt.get('phase')} {nxt['date']}")
+    if tail:
+        lines.append(" · ".join(tail))
+    return lines
 
 
 def _daily_from_periods(periods: list[dict[str, Any]]) -> list[str]:
