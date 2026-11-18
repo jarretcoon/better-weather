@@ -389,3 +389,29 @@ def test_a_forecast_that_starts_tonight_ends_without_a_dangling_low(home):
     assert lines[1].startswith("**Sunday Night** ") and " low " in lines[1]
     assert not any("/ –" in line for line in lines)
     assert " high · " in lines[-1]
+
+
+def test_a_hung_station_server_is_not_asked_three_times_over(home):
+    asked = []
+
+    def kdsm_fails(how):
+        def override(request):
+            if request.url.path.endswith("/observations/latest"):
+                asked.append(request.url.path.split("/")[2])
+                if "KDSM" in request.url.path:
+                    if how == "hang":
+                        raise httpx.ReadTimeout("hung", request=request)
+                    return httpx.Response(500, json={})
+            return None
+        return override
+
+    http.set_transport_for_tests(replay_transport(kdsm_fails("hang")))
+    call("weather")
+    assert set(asked) == {"KDSM"}  # no answer at all: the other stations are on the same server
+    asked.clear()
+    from better_weather.core import cache
+
+    cache.use_memory_cache_for_tests()
+    http.set_transport_for_tests(replay_transport(kdsm_fails("500")))
+    call("weather")
+    assert "KIKV" in asked  # one station's own error: the next one is tried

@@ -128,8 +128,10 @@ def latest_observation(point_props: dict[str, Any], *, lat: float | None = None,
         try:
             fetched = http.get_json(f"{BASE}/stations/{station['id']}/observations/latest",
                                     ttl=http.TTL_OBS, max_stale=6 * 3600, allow_404=True)
-        except http.FetchError:
-            continue
+        except http.FetchError as exc:
+            if exc.status is None:  # no answer at all (a hang, the network): the next station is on the same server
+                break
+            continue  # this station's error (some answer 500 when they have nothing)
         if not fetched.found:
             continue
         props = (fetched.data or {}).get("properties") or {}
