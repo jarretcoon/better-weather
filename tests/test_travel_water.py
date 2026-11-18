@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -37,6 +37,93 @@ def test_faa_status_parsing():
     dep = next(s for s in ord_status if s["type"].startswith("General"))
     assert dep["Max"] == "45 minutes" and dep["Trend"] == "Increasing"
     assert travel.faa_status("DSM") == []
+
+
+HNL_FAI_XML = b"""<AIRPORT_STATUS_INFORMATION><Delay_type><Name>Ground Stop Programs</Name><Ground_Stop_List>
+<Program><ARPT>HNL</ARPT><Reason>weather</Reason></Program><Program><ARPT>FAI</ARPT><Reason>snow</Reason></Program>
+</Ground_Stop_List></Delay_type></AIRPORT_STATUS_INFORMATION>"""
+STATIONS = {"PHNL": {"name": "Honolulu", "lat": 21.32, "lon": -157.92, "timezone": "Pacific/Honolulu"},
+            "PRIO": {"name": "Prineville 4NW, OR", "lat": 44.3, "lon": -120.9, "timezone": "America/Los_Angeles"}}
+
+
+def test_three_letter_codes_find_hawaii_like_places_does(monkeypatch):
+    monkeypatch.setattr(places.nws, "station_info", lambda code: STATIONS.get(code))
+    assert travel.icao_for("HNL") == "PHNL"
+    assert travel.icao_for("RIO") == "KRIO", "a P station in Oregon isn't an airport"
+    assert travel.icao_for("XYZ") == "KXYZ"
+
+
+def _awc(metars, airports=None, faa=FAA_XML, seen=None):
+    """aviationweather.gov, the FAA and the timezone lookup, answered from tables."""
+    def handler(request):
+        url, ids = str(request.url), request.url.params.get("ids", "")
+        if seen is not None:
+            seen.append(url)
+        if "/api/data/metar" in url:
+            return httpx.Response(200, json=[metars[ids]] if ids in metars else [])
+        if "/api/data/taf" in url:
+            return httpx.Response(200, json=[])
+        if "/api/data/airport" in url:
+            if airports is None:
+                return httpx.Response(503)
+            return httpx.Response(200, json=[airports[ids]] if ids in airports else [])
+        if "nasstatus" in url:
+            return httpx.Response(200, content=faa)
+        return httpx.Response(200, json={"timezone": "UTC"})
+    return httpx.MockTransport(handler)
+
+
+def _metar(icao, name):
+    return {"icaoId": icao, "obsTime": int(clock.now_utc().timestamp()), "name": name, "temp": 10, "wdir": 190,
+            "wspd": 8, "visib": "6+", "clouds": [], "fltCat": "VFR", "lat": 50.0, "lon": 0.0}
+
+
+def test_faa_status_only_for_us_airports_by_the_faa_code(monkeypatch):
+    monkeypatch.setattr(places.nws, "station_info", lambda code: STATIONS.get(code))
+    travel._faa_cache.update(at=0.0, body=b"")
+    metars = {"EGLL": _metar("EGLL", "London/Heathrow Intl, EN, GB"),
+              "CYYZ": _metar("CYYZ", "Toronto/Pearson Intl, ON, CA"),
+              "PHNL": _metar("PHNL", "Honolulu Intl, HI, US"),
+              "PAFA": _metar("PAFA", "Fairbanks Intl, AK, US"),
+              "TJSJ": _metar("TJSJ", "San Juan/Marin Intl, , PR")}
+    airports = {"PHNL": {"icaoId": "PHNL", "faaId": "HNL", "country": "US"},
+                "PAFA": {"icaoId": "PAFA", "faaId": "FAI", "country": "US"},
+                "TJSJ": {"icaoId": "TJSJ", "faaId": "SJU", "country": "US"}}
+    seen: list[str] = []
+    http.set_transport_for_tests(_awc(metars, airports, HNL_FAI_XML, seen))
+    for code in ("EGLL", "CYYZ"):
+        r = travel.airport(code, "us", "12h")
+        assert "faa_status" not in r and "FAA" not in r["source"]
+        assert r["notes"] == ["FAA delays and closures are for US airports only."]
+    assert not any("nasstatus" in u or "/airport?" in u for u in seen), "the FAA isn't even asked about Heathrow"
+    hnl = travel.airport("HNL", "us", "12h")
+    assert hnl["airport"].startswith("PHNL") and hnl["faa_status"] == [{"type": "Ground Stop Programs",
+                                                                        "Reason": "weather"}]
+    assert travel.airport("PAFA", "us", "12h")["faa_status"][0]["Reason"] == "snow", "PAFA is FAI to the FAA"
+    assert travel.airport("TJSJ", "us", "12h")["faa_status"] == "No delays or closures reported"
+
+
+def test_faa_code_without_the_airport_list():
+    http.set_transport_for_tests(_awc({}, airports=None))
+    assert travel.faa_code("PHNL") == "HNL" and travel.faa_code("KDSM") == "DSM"
+    with pytest.raises(http.FetchError):
+        travel.faa_code("TJSJ")  # its FAA code (SJU) can't be worked out from the letters
+
+
+def test_arrival_already_passed():
+    now = clock.now_utc().replace(minute=0, second=0, microsecond=0)
+    hours = [(now + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M") for h in range(-30, 7 * 24)]
+    data = {"timezone": "UTC", "utc_offset_seconds": 0,
+            "hourly": {"time": hours, "temperature_2m": [10.0] * len(hours)}}
+    http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(200, json=data)))
+    place = places.Place("Reykjavik, IS", 64.15, -21.94, country="IS", timezone="UTC")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M")
+    r = travel.arrival(place, yesterday, "us", "12h")
+    assert r["error"] == "That arrival time has already passed." and "YYYY-MM-DDTHH:MM" in r["hint"]
+    soon = (now + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M")
+    assert "error" not in travel.arrival(place, soon, "us", "12h")
+    far = (now + timedelta(days=12)).strftime("%Y-%m-%dT%H:%M")
+    assert "beyond the 7-day" in travel.arrival(place, far, "us", "12h")["error"]
 
 
 def _gauge(lid, lat, lon, stage, cat, fstage=-999, fcat="fcst_not_current"):

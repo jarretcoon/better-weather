@@ -6,10 +6,10 @@ from __future__ import annotations
 import re
 import time
 import xml.etree.ElementTree as ET
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from . import http, units
+from . import http, places, units
 from .clock import now_utc
 from .places import Place
 from .sources import iem, nws, openmeteo
@@ -20,6 +20,8 @@ CATEGORY_MEANING = {"VFR": "good flying weather", "MVFR": "marginal (lower cloud
                     "IFR": "poor (low clouds or fog)", "LIFR": "very poor (very low clouds or thick fog)"}
 _ICAO = re.compile(r"^[A-Z][A-Z0-9]{3}$")
 _IATA = re.compile(r"^[A-Z0-9]{3}$")
+# a METAR's name ends in its country ("Des Moines Intl, IA, US") or a US territory's own code ("…, , PR")
+_US_AREAS = {"US", "PR", "GU", "VI", "AS", "MP"}
 
 
 def icao_for(code: str) -> str:
@@ -27,8 +29,35 @@ def icao_for(code: str) -> str:
     if _ICAO.match(code):
         return code
     if _IATA.match(code):
-        return "K" + code  # lower 48; Alaska/Hawaii users can pass the 4-letter code
+        # K + the code in the lower 48, P + it in Alaska, Hawaii and the Pacific (HNL -> PHNL), as places does
+        found = places.us_airport_station(code)
+        return found[0] if found else "K" + code
     raise ValueError(f"'{code}' doesn't look like an airport code (try DSM or KDSM).")
+
+
+def _in_us(icao: str, metar: dict[str, Any]) -> bool:
+    """A US airport, territories included: the only ones the FAA reports delays for."""
+    name = str(metar.get("name") or "")
+    if "," in name:
+        return name.rsplit(",", 1)[1].strip().upper() in _US_AREAS
+    return icao.startswith("K")
+
+
+def faa_code(icao: str) -> str:
+    """The FAA's own code for a US airport: KDSM -> DSM, PHNL -> HNL, PAFA -> FAI, TJSJ -> SJU, from the
+    aviationweather.gov airport list; if that can't be read, a K or P code without its first letter."""
+    try:
+        rows = http.get_json(f"{AWC}/airport", {"ids": icao, "format": "json"}, ttl=30 * 24 * 3600,
+                             max_stale=365 * 24 * 3600).data
+    except http.FetchError:
+        rows = None
+    for row in rows if isinstance(rows, list) else []:
+        if (isinstance(row, dict) and str(row.get("icaoId") or "").upper() == icao
+                and str(row.get("country") or "").upper() == "US" and row.get("faaId")):
+            return str(row["faaId"]).upper()
+    if icao[:1] in ("K", "P"):
+        return icao[1:]
+    raise http.FetchError(f"{AWC}/airport", f"no FAA code found for {icao}")
 
 
 def _ceiling_ft(clouds: list[dict[str, Any]]) -> int | None:
@@ -68,8 +97,8 @@ def airport(code: str, units_: str, clock: str) -> dict[str, Any]:
     rows = metar.data if isinstance(metar.data, list) else []
     if not rows:
         guessed = icao != code.strip().upper()
-        hint = ("Outside the lower 48 use the 4-letter ICAO code, e.g. EGLL (Heathrow), PHNL (Honolulu), "
-                "PANC (Anchorage), CYYZ (Toronto)." if guessed
+        hint = ("Try the airport's 4-letter ICAO code, e.g. EGLL (Heathrow), CYYZ (Toronto), PAFA (Fairbanks), "
+                "TJSJ (San Juan)." if guessed
                 else "Check the code, or ask for weather at the city instead.")
         return {"airport": icao, "error": f"No current report for {icao}.", "hint": hint}
     m = rows[0]
@@ -90,14 +119,18 @@ def airport(code: str, units_: str, clock: str) -> dict[str, Any]:
             "weather": m.get("wxString"),
             "raw": m.get("rawOb"),
         }.items() if v is not None},
-        "source": "aviationweather.gov (METAR/TAF), FAA NAS status",
+        "source": "aviationweather.gov (METAR/TAF)",
     }
     try:
         result["forecast"] = _taf(icao, tz, clock, now)
     except http.FetchError as exc:
         result["notes"] = [f"Airport forecast unavailable ({exc})"]
+    if not _in_us(icao, m):  # the FAA has no say at Heathrow: no "no delays" there
+        result.setdefault("notes", []).append("FAA delays and closures are for US airports only.")
+        return result
+    result["source"] += ", FAA NAS status"
     try:
-        status = faa_status(icao[1:] if icao.startswith("K") else icao)
+        status = faa_status(faa_code(icao))
         result["faa_status"] = status or "No delays or closures reported"
     except http.FetchError as exc:
         result.setdefault("notes", []).append(f"FAA status unavailable ({exc})")
@@ -188,6 +221,9 @@ def arrival(place: Place, arrive: str | None, units_: str, clock: str) -> dict[s
     tz = units.zone(data.get("timezone"), data.get("utc_offset_seconds"))
     now = now_utc().astimezone(tz)
     when = _parse_arrival(arrive, tz, now)
+    if when < now - timedelta(hours=1):
+        return {"place": place.public(), "error": "That arrival time has already passed.",
+                "hint": "Give the arrival as YYYY-MM-DDTHH:MM, local time at the destination."}
     hourly = data.get("hourly") or {}
     best: tuple[float, int] | None = None
     for i, stamp in enumerate(hourly.get("time") or []):
