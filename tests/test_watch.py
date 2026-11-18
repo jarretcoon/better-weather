@@ -499,3 +499,23 @@ def test_no_saved_zone_keeps_the_rain_hours_local():
     http.set_transport_for_tests(_no_zone_world(model=model))
     message = watch.check({**RAIN, "timezone": None}, {})[0]
     assert message.endswith("☔ Rain likely to start in Des Moines, IA within the hour.")
+
+
+# --- the 0.9.3 review ------------------------------------------------------------------------------------------
+
+def test_a_killed_runs_lock_costs_one_check_not_five():
+    """Hermes stops a script with SIGTERM, which skips `finally`: the lock it leaves must go stale after one run."""
+    assert watch.RUN_BUDGET_S < watch.LOCK_STALE_S <= 2 * 60 + 30
+
+
+def test_setup_for_a_new_place_starts_fresh(tmp_path):
+    def setup(lat):
+        watch.write_setup(hermes_home=tmp_path / "home", data_dir=tmp_path / "data", core_dir=tmp_path / "core",
+                          place={"name": "X", "lat": lat, "lon": 2}, level="warnings", freeze=True, rain=False,
+                          units_="us", clock="12h")
+    setup(1)
+    watch._save(tmp_path / "data" / watch.STATE_NAME, {"sent": {"a": {"event": "Flood Watch"}}})
+    setup(1)   # the same place again (a new level, say): what's tracked stays
+    assert watch._load(tmp_path / "data" / watch.STATE_NAME, {})["sent"]
+    setup(3)   # somewhere else: the old place's alerts must not "end" under the new name
+    assert watch._load(tmp_path / "data" / watch.STATE_NAME, None) == {}

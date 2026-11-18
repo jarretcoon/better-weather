@@ -2,6 +2,7 @@
 for a mid-latitude US city, the far north (the moon up all day, the sun not at all) and two southern cities, and the
 moon's phases to within half an hour. The same table as weather.lou.zone's tests/astro.test.mjs."""
 
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -67,6 +68,15 @@ def test_the_next_phase_is_always_after_now():
     assert full + 25 * astro.DAY < after < full + 32 * astro.DAY
 
 
+def test_sunrise_and_sunset_worked_out_locally_match_the_naval_observatory():
+    # USNO, Des Moines 2026-11-17 (CST): sunrise 7:06, sunset 16:52
+    start = _ts("2026-11-17T06:00:00Z")
+    events = astro.sun_events(start, start + astro.DAY, 41.587, -93.625)
+    got = {k: datetime.fromtimestamp(v - 6 * 3600, UTC).strftime("%H:%M") for k, v in events}
+    assert abs(_minutes(got["rise"]) - _minutes("07:06")) <= 2 and abs(_minutes(got["set"]) - _minutes("16:52")) <= 2
+    assert astro.sun_events(_ts("2026-12-21T09:00:00Z"), _ts("2026-12-22T09:00:00Z"), 71.291, -156.789) == []
+
+
 def test_names_and_emoji():
     day = _ts("2026-11-17T06:00:00Z")  # Des Moines' Nov 17 (first quarter at 11:48 UTC)
     assert astro.moon_name(day + 12 * 3600, day, day + astro.DAY) == "First quarter"
@@ -112,6 +122,36 @@ def test_night_card_leads_with_the_moon_then_the_next_sunrise():
     lines = display.sky_lines(sky)
     assert "· up now, sets 1" in lines[0] or "· up now, sets 12" in lines[0]
     assert lines[1] == "🌅 Sunrise 7:07 AM · 🌕 Full moon Tue, Nov 24"
+
+
+def test_without_the_forecast_the_sun_lines_are_still_right():
+    from zoneinfo import ZoneInfo
+
+    from better_weather.core import display, report
+    from better_weather.core.places import Place
+
+    fmt = report._Fmt("us", "12h", ZoneInfo("America/Chicago"))
+    fmt.now = datetime.fromisoformat("2026-11-17T18:00:00+00:00").astimezone(ZoneInfo("America/Chicago"))
+    sky = report._sky(Place("Des Moines, IA", 41.587, -93.625, "US"), fmt, {})  # Open-Meteo didn't answer
+    assert sky["mode"] == "sun" and not sky["sun_all_day"], "noon in November isn't the midnight sun"
+    # USNO: 7:06 AM and 4:52 PM; worked out here to within a minute
+    assert re.fullmatch(r"🌅 Sunrise 7:0[5-7] AM · 🌇 Sunset 4:5[1-3] PM", display.sky_lines(sky)[0])
+    fmt.now = datetime.fromisoformat("2026-11-18T04:00:00+00:00").astimezone(ZoneInfo("America/Chicago"))
+    night = report._sky(Place("Des Moines, IA", 41.587, -93.625, "US"), fmt, {})
+    assert night["mode"] == "moon" and night["next_sunrise"] in ("7:06 AM", "7:07 AM", "7:08 AM")
+
+
+def test_a_moonrise_more_than_a_day_off_says_which_day():
+    from zoneinfo import ZoneInfo
+
+    from better_weather.core import report
+    from better_weather.core.places import Place
+
+    fmt = report._Fmt("us", "12h", ZoneInfo("America/Anchorage"))
+    fmt.now = datetime.fromisoformat("2026-11-24T21:00:00+00:00").astimezone(ZoneInfo("America/Anchorage"))
+    sky = report._sky(Place("Utqiagvik, AK", 71.291, -156.789, "US"), fmt, {})  # the moon up all day around full
+    when = sky["moon"].get("sets") or sky["moon"].get("rises")
+    assert when is None or not when[0].isdigit(), when
 
 
 def test_card_lines_for_the_edges():

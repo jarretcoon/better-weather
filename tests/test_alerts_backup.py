@@ -349,12 +349,24 @@ def test_out_of_bounds_is_not_covered_not_nws_down_and_never_the_copy():
     assert issubclass(nws.NotCovered, http.FetchError)    # every caller already treats it as "couldn't check"
 
 
-def test_with_the_nws_down_its_grid_lookup_still_says_abroad():
+def test_with_the_nws_down_its_saved_grid_lookup_still_says_abroad():
     log: list[str] = []
     http.set_transport_for_tests(serve_abroad(log, points=404, alerts=503))
+    assert nws.point(43.65, -79.38) is None   # Toronto, looked up before: inside the copy's coarse area, not the grid
+    log.clear()
     with pytest.raises(nws.NotCovered):
-        nws.alerts_at(43.65, -79.38)   # Toronto: inside the copy's coarse area, outside the NWS's grid
-    assert not any("mesonet" in line for line in log)
+        nws.alerts_at(43.65, -79.38)
+    assert not any("mesonet" in line or "/points/" in line for line in log), log
+
+
+def test_with_the_nws_hanging_the_copy_is_asked_without_a_second_wait():
+    """Review 2026-11-18: the grid lookup asked live after the alerts call failed cost a push run its whole budget
+    in an NWS hang, so the copy was never reached. Coverage is now decided from what's saved."""
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=503, alerts=503))
+    fetched = nws.alerts_at(41.6, -93.61)   # Des Moines, never looked up
+    assert iem.is_copy(fetched.data)
+    assert not any("/points/" in line for line in log), log
 
 
 def test_with_the_nws_all_down_the_copy_refuses_a_spot_abroad():
@@ -370,6 +382,7 @@ def test_with_the_nws_all_down_the_copy_refuses_a_spot_abroad():
 def test_a_spot_the_nws_covers_is_never_called_abroad_by_the_copys_rough_area():
     log: list[str] = []
     http.set_transport_for_tests(serve_abroad(log, points=200, alerts=503))   # its grid answers; alerts are down
+    assert nws.point(0.0, 0.0) is not None
     with pytest.raises(http.FetchError) as caught:
         nws.alerts_at(0.0, 0.0)   # (outside the copy's area: pretend the NWS covered it)
     assert not isinstance(caught.value, nws.NotCovered) and "503" in str(caught.value)

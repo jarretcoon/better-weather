@@ -121,6 +121,22 @@ def moon_events(start: float, end: float, lat: float, lon: float, step: float = 
     return out
 
 
+SUN_HORIZON = -0.833  # sunrise and sunset: the top of the disc on the horizon, with refraction (degrees, its centre)
+
+
+def sun_events(start: float, end: float, lat: float, lon: float, step: float = 600) -> list[tuple[str, float]]:
+    """Every sunrise and sunset between two moments, in order: [("rise" | "set", t)], to about a minute."""
+    out: list[tuple[str, float]] = []
+    t0, h0 = start, sun_altitude(start, lat, lon) - SUN_HORIZON
+    while t0 < end:
+        t1 = min(t0 + step, end)
+        h1 = sun_altitude(t1, lat, lon) - SUN_HORIZON
+        if (h0 < 0) != (h1 < 0):
+            out.append(("rise" if h1 >= 0 else "set", t0 + (t1 - t0) * h0 / (h0 - h1)))
+        t0, h0 = t1, h1
+    return out
+
+
 def moon_pass(t: float, lat: float, lon: float) -> dict[str, float | bool | None]:
     """The moon's pass that matters at *t*: while it's up, the rise before and the set after; while it's down, the
     next rise and the set after that. A missing end is None (up or down for more than a day: far north or south)."""

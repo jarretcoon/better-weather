@@ -110,6 +110,12 @@ def cache_key(url: str, params: Mapping[str, Any] | None) -> str:
     return url + "?" + urlencode(sorted((k, str(v)) for k, v in params.items()))
 
 
+def saved_status(url: str, params: Mapping[str, Any] | None = None) -> int | None:
+    """The status (200, 404) of a saved answer for *url*, however old; None when there is none. No network."""
+    saved = get_cache().get(cache_key(url, params))
+    return None if saved is None else saved[0]
+
+
 @contextmanager
 def interactive() -> Iterator[None]:
     """Fetches inside this block (in this thread) use the interactive tries and timeouts."""

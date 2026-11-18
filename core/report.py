@@ -520,6 +520,10 @@ def _sky(place: Place, fmt: _Fmt, daily: dict[str, Any]) -> dict[str, Any] | Non
     def at(ts: float) -> str:
         return units.clock(datetime.fromtimestamp(ts, fmt.tz), fmt.clock)
 
+    def ahead(ts: float) -> str:
+        """A moonrise or moonset: with its day when it's more than 20 hours off (far north or south it can be)."""
+        return at(ts) if ts - t <= 20 * 3600 else units.day_clock(datetime.fromtimestamp(ts, fmt.tz), fmt.clock, now)
+
     def local(text: Any) -> datetime | None:
         dt = units.parse_time(text)
         return dt.replace(tzinfo=fmt.tz) if dt is not None and dt.tzinfo is None else dt
@@ -529,7 +533,9 @@ def _sky(place: Place, fmt: _Fmt, daily: dict[str, Any]) -> dict[str, Any] | Non
     today = now.date()
     day_start = datetime.combine(today, time(0), tzinfo=fmt.tz).timestamp()
     day_end = datetime.combine(today + timedelta(days=1), time(0), tzinfo=fmt.tz).timestamp()
-    # Open-Meteo gives a day with no sunrise or sunset (far north or south) the same time for both
+    if not any(d == today.isoformat() for d, _up, _down in days):
+        days = _sun_days(today, fmt.tz, lat, lon)   # no forecast to read them from: work them out here
+    # a day with no sunrise or sunset (far north or south) has the same time for both, as Open-Meteo gives it
     with_sun = [(d, up, down) for d, up, down in days if up is not None and down is not None and up != down]
     todays = next(((up, down) for d, up, down in with_sun if d == today.isoformat()), None)
     sun_up = todays[0] <= now < todays[1] if todays else astro.sun_altitude(t, lat, lon) > 0
@@ -542,10 +548,10 @@ def _sky(place: Place, fmt: _Fmt, daily: dict[str, Any]) -> dict[str, Any] | Non
     rise, down = p["rise"], p["set"]
     if p["up"]:
         moon["up"] = True
-        moon["sets"] = at(float(down)) if isinstance(down, float) else None
+        moon["sets"] = ahead(float(down)) if isinstance(down, float) else None
     else:
         moon["up"] = False
-        moon["rises"] = at(float(rise)) if isinstance(rise, float) else None
+        moon["rises"] = ahead(float(rise)) if isinstance(rise, float) else None
     full, new = astro.next_phase(t, 0.5), astro.next_phase(t, 0)
     when = datetime.fromtimestamp(min(full, new), fmt.tz)
     moon["next"] = {"phase": "Full moon" if full < new else "New moon", "emoji": "🌕" if full < new else "🌑",
@@ -561,6 +567,23 @@ def _sky(place: Place, fmt: _Fmt, daily: dict[str, Any]) -> dict[str, Any] | Non
         if (next_sun.date() - today).days > 1:  # far north, after the polar night: say which day
             sun = f"{next_sun:%a} {sun}"
     return {"mode": "moon", "next_sunrise": sun, "moon": moon}
+
+
+def _sun_days(today: Any, tz: tzinfo, lat: float, lon: float, count: int = 3) -> list[tuple[str, Any, Any]]:
+    """[(date, sunrise, sunset)] from today on, worked out locally (astro.sun_events); a day without either gets
+    the same time for both, the way Open-Meteo marks it."""
+    out = []
+    for i in range(count):
+        day = today + timedelta(days=i)
+        start = datetime.combine(day, time(0), tzinfo=tz)
+        events = astro.sun_events(start.timestamp(), (start + timedelta(days=1)).timestamp(), lat, lon)
+        up = next((ts for kind, ts in events if kind == "rise"), None)
+        down = next((ts for kind, ts in events if kind == "set" and (up is None or ts > up)), None)
+        if up is None or down is None:
+            out.append((day.isoformat(), start, start))
+        else:
+            out.append((day.isoformat(), datetime.fromtimestamp(up, tz), datetime.fromtimestamp(down, tz)))
+    return out
 
 
 # --- forecast ---------------------------------------------------------------------------------
@@ -626,7 +649,8 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place and place.note else []
     unsure = False   # the copy answered for coordinates the NWS couldn't place: they may not be in the US at all
     if area:
-        fetched = nws.alerts_in_area(area)
+        with http.interactive():
+            fetched = nws.alerts_in_area(area)
         label = f"{area.upper()} (statewide)"
         tz = _offset_of_first_alert(fetched.data)
     elif place is None:
@@ -635,11 +659,13 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
         lookup_notes: list[str] = []
         point, known = _nws_lookup(place, lookup_notes)
         try:
-            found = nws.alerts_at(place.lat, place.lon) if point is not None or not known else None
+            with http.interactive():   # someone is waiting: fewer, shorter tries (the cron keeps the patient ones)
+                found = nws.alerts_at(place.lat, place.lon) if point is not None or not known else None
         except nws.NotCovered:   # the NWS's alert area doesn't reach it: abroad after all
             found = None
         if found is None:
-            intl = _intl_alerts(place, clock)
+            with http.interactive():
+                intl = _intl_alerts(place, clock)
             return display.card_first(display.strip_private(intl), display.alerts_card(intl))
         fetched = found
         notes.extend(lookup_notes)
@@ -798,11 +824,15 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     if al is not None:
         storm = [a for a in nws.normalize_alerts(al.data)
                  if any(word in a["event"].lower() for word in SEVERE_EVENTS)]
-        result["storm_alerts"] = [_clean({
-            "event": a["event"], "until": fmt.at(a.get("ends")), "headline": a.get("headline"),
-            "details": a.get("details"), "instruction": a.get("instruction"),
-            "life_threatening": a.get("life_threatening") or None,
-        }) for a in storm]
+        result["storm_alerts"] = []
+        for a in storm:
+            item = {"event": a["event"], "starts": a.get("starts")}
+            _mark_upcoming(item, fmt)
+            result["storm_alerts"].append(_clean({
+                **item, "starts": fmt.at(a.get("starts")) if item.get("upcoming") else None,
+                "until": fmt.at(a.get("ends")), "headline": a.get("headline"), "details": a.get("details"),
+                "instruction": a.get("instruction"), "life_threatening": a.get("life_threatening") or None,
+            }))
     elif point or not known:
         notes.append("⚠️ Watches and warnings could not be checked right now — don't assume there are none")
     else:
@@ -850,7 +880,7 @@ def severe_text(r: dict[str, Any], alerts_checked: bool = True) -> str:
     lines = []
     for a in r.get("storm_alerts") or []:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
-        lines.append(f"{mark} {a['event']}" + (f" until {a['until']}" if a.get("until") else ""))
+        lines.append(f"{mark} {a['event']}{display._when(a)}")
     for day in r.get("spc_outlook") or []:
         line = f"Day {day['day']}: {day['risk']}"
         hz = day.get("hazards") or {}

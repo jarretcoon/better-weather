@@ -427,3 +427,13 @@ def test_a_hung_station_server_is_not_asked_three_times_over(home):
     http.set_transport_for_tests(replay_transport(kdsm_fails("500")))
     call("weather")
     assert "KIKV" in asked  # one station's own error: the next one is tried
+
+
+def test_the_severe_answer_says_when_a_later_alert_starts():
+    from better_weather.core import report
+
+    text = report.severe_text({"storm_alerts": [
+        {"event": "Flash Flood Watch", "upcoming": True, "starts": "tomorrow 6 AM", "until": "tomorrow 6 PM"},
+        {"event": "Severe Thunderstorm Warning", "until": "4:45 PM", "life_threatening": True}]})
+    assert text.splitlines() == ["⚠️ Flash Flood Watch from tomorrow 6 AM to 6 PM",
+                                 "🚨 Severe Thunderstorm Warning until 4:45 PM"]

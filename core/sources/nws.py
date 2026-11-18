@@ -215,12 +215,13 @@ def _kind(event: str) -> int:
 
 
 def covers(lat: float, lon: float) -> bool | None:
-    """Whether the NWS covers the spot, by its grid lookup (a saved answer will do: it's kept for weeks); None when
-    it can't say. (Its grid and its alert area match: a 404 here is a 400 "out of bounds" from the alerts.)"""
-    try:
-        return point(lat, lon) is not None
-    except http.FetchError:
-        return None
+    """Whether the NWS covers the spot, without asking it (it just didn't answer, and a second wait could use up a
+    push run before the copy is asked): its saved grid lookup of any age says (its grid and its alert area match:
+    a 404 there is a 400 "out of bounds" from the alerts); with none saved, False well outside its area, else None."""
+    status = http.saved_status(f"{BASE}/points/{_q(round(lat, 3))},{_q(round(lon, 3))}")
+    if status is not None:
+        return status == 200
+    return False if not iem.in_nws_area(lat, lon) else None
 
 
 def _out_of_bounds(exc: http.FetchError) -> bool:

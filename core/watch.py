@@ -41,8 +41,10 @@ FAIL_NOTICE_AFTER = 10          # consecutive failed checks (~20 min at every 2m
 INSTRUCTION_CHARS = 450
 STARTS_LATER = timedelta(minutes=5)   # an alert starting later than this says "from … to …", not "until …"
 LOCK_NAME = "watch.lock"
-LOCK_STALE_S = 10 * 60          # a lock this old was left by a run that died or hung: the next run takes it over
 RUN_BUDGET_S = 100              # a run gives up after this (the job runs every 2 minutes) and counts as a failed check
+# A lock older than a whole run was left by one that was killed (Hermes stops a script with SIGTERM, which skips
+# `finally`): the next run takes it over, so a kill costs one check, not several.
+LOCK_STALE_S = RUN_BUDGET_S + 30
 EXTRAS_MIN_S = 10               # the freeze/rain heads-ups only start with this much of the budget left
 _VTEC = re.compile(r"/[OTEX]\.([A-Z]{3})\.([A-Z]{4})\.([A-Z]{2})\.([A-Z])\.(\d{4})\.")
 
@@ -61,6 +63,8 @@ def _save(path: Path, data: Any) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(data, indent=1, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())   # a power cut must not leave an empty state (it would re-push every alert)
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -569,6 +573,10 @@ def write_setup(*, hermes_home: Path, data_dir: Path, core_dir: Path, place: dic
               "timezone": place.get("timezone"), "level": level, "freeze": freeze, "rain": rain,
               "units": units_, "clock": clock}
     data_dir.mkdir(parents=True, exist_ok=True)
+    old = _load(data_dir / CONFIG_NAME, None)
+    if isinstance(old, dict) and (old.get("lat"), old.get("lon")) != (config["lat"], config["lon"]):
+        # a new place: the old place's alerts must not "end" under its name, and its heads-ups don't carry over
+        _save(data_dir / STATE_NAME, {})
     _save(data_dir / CONFIG_NAME, config)
     scripts = hermes_home / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
