@@ -328,6 +328,18 @@ def test_snow_is_called_snow():
     assert watch.check(RAIN, {})[0] == "🌨️ Snow likely to start in Des Moines, IA within the hour."
 
 
+def test_zero_degrees_counts_as_freezing():
+    """0.0 °C read as "no reading": last night's 0.0 °C wasn't a freeze (a false "first freeze"), and 0.0 °C rain
+    wasn't snow."""
+    _at("2026-11-15T15:05")
+    temps = [2.0] * 60 + [0.0] * 6 + [6.0] * 6 + [1.0] * 9 + [-2.0] * 10 + [3.0] * 10
+    http.set_transport_for_tests(_serve_model(_model("2026-11-12T00:00", temps)))
+    assert watch.check(FREEZE, {})[0] == ""
+    _at("2026-12-20T13:20")
+    http.set_transport_for_tests(_serve_model(_model("2026-12-20T13:00", [0.0] * 4, chance=90, precip=0.6)))
+    assert watch.check(RAIN, {})[0] == "🌨️ Snow likely to start in Des Moines, IA within the hour."
+
+
 def test_no_first_freeze_claim_when_it_froze_last_night_even_without_history():
     _at("2026-11-15T15:05")
     # model rows start 3 days back: last night dropped to -4°C, tonight -2°C

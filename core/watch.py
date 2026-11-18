@@ -401,7 +401,8 @@ def _freeze(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str, 
     state["last_freeze_night"] = today.isoformat()
     recent = [r for r in rows if now - timedelta(days=FREEZE_QUIET_NIGHTS) <= r["dt"] <= now - timedelta(hours=3)]
     limit = 0.0 if threshold is None else threshold
-    if any((units.num(r.get("temperature_2m")) or 99) <= limit for r in recent):
+    temps = (units.num(r.get("temperature_2m")) for r in recent)
+    if any(t is not None and t <= limit for t in temps):   # (0.0 °C is a freeze, not "no reading")
         return None  # it already froze in the last few nights (works even with no saved history)
     if last:
         try:
@@ -431,7 +432,8 @@ def _rain_soon(config: dict[str, Any], state: dict[str, Any], data: dict[str, An
         likely = (units.num(row.get("precipitation_probability")) or 0) >= 60
         if likely and (units.num(row.get("precipitation")) or 0) >= 0.2:
             state["rain_at"] = time.time()
-            snowy = (units.num(row.get("snowfall")) or 0) > 0 or (units.num(row.get("temperature_2m")) or 5) <= 0.5
+            temp = units.num(row.get("temperature_2m"))   # (0.0 °C is cold enough, not "no reading")
+            snowy = (units.num(row.get("snowfall")) or 0) > 0 or (temp is not None and temp <= 0.5)
             kind = "🌨️ Snow" if snowy else "☔ Rain"
             return f"{kind} likely to start in {config.get('name') or 'home'} within the hour."
     return None
