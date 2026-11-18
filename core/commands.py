@@ -274,6 +274,24 @@ def _hermes_home() -> Path:
         return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
 
 
+def _push_coverage(place: places.Place) -> tuple[dict[str, Any] | None, str | None]:
+    """(the place's NWS grid point, why pushes can't watch it). The pushes are the NWS's alerts: US only."""
+    outside = (f"Warning pushes are US-only: they come from the National Weather Service, and {place.name} is "
+               "outside its area.")
+    if not place.maybe_us:
+        return None, outside
+    try:
+        point = nws.point(place.lat, place.lon)
+    except http.FetchError:
+        if place.country is None:   # coordinates or an airport: only the NWS can say whether they're in the US
+            return None, (f"Couldn't reach the National Weather Service to check that it covers {place.name}. "
+                          "Try again in a few minutes.")
+        return None, None           # a US place by name: its zone comes from the place search
+    if point is None:
+        return None, outside
+    return point, None
+
+
 def _push_cli(args: argparse.Namespace) -> int:
     sub = getattr(args, "push_command", None) or "status"
     data_dir = settings.data_dir()
@@ -287,8 +305,15 @@ def _push_cli(args: argparse.Namespace) -> int:
         except places.PlaceError as exc:
             print(f"{exc} {exc.hint}".strip())
             return 1
+        point, problem = _push_coverage(place)
+        if problem:
+            print(problem)
+            return 1
+        public = place.public()
+        if not public.get("timezone") and (point or {}).get("timeZone"):
+            public["timezone"] = (point or {})["timeZone"]   # the pushes' times and quiet hours are local
         result = watch.write_setup(hermes_home=_hermes_home(), data_dir=data_dir,
-                                   core_dir=Path(__file__).resolve().parent, place=place.public(),
+                                   core_dir=Path(__file__).resolve().parent, place=public,
                                    level=args.level, freeze=args.freeze, rain=args.rain,
                                    units_=s.units, clock=s.clock)
         print(f"Watching {place.name} ({args.level}).")

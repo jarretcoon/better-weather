@@ -91,7 +91,8 @@ refreshed every 10 minutes.
 
 A Hermes cron job in no-agent mode runs a tiny script every 2 minutes. It prints, and so messages
 you, only when something changes: a new warning or watch for your place, an extension, or the end
-of one. Quiet checks send nothing and use no model at all.
+of one. Quiet checks send nothing and use no model at all. The pushes are the NWS's alerts, so
+they're US-only: `push setup` refuses a place outside the NWS's area.
 
 ```bash
 hermes better-weather push setup                 # home, warnings + watches
@@ -101,13 +102,17 @@ hermes better-weather push check                 # what a run would send right n
 hermes better-weather push off                   # pause (push on resumes)
 ```
 
-It keys each alert on the NWS event id, so routine updates stay quiet; cancellations and upgrades
-end the old alert right away, and an alert must be missing from two checks in a row before it is
-called ended. The freeze heads-up comes at 3 PM, only for the first freezing night after a milder stretch (not
+It keys each alert on the NWS event id, so routine updates stay quiet. The NWS's feed leaves out
+cancellation and upgrade notices, so an alert must be missing from two checks in a row (about 4
+minutes) before it is called ended; one replaced by a stronger alert from the same office (a watch
+by its warning, a gale warning by a storm warning) is called upgraded, not ended. An expiry notice
+ends an alert right away. An alert that starts later says so ("from tomorrow 3 AM to 9 PM").
+The freeze heads-up comes at 3 PM, only for the first freezing night after a milder stretch (not
 every night of winter). The rain/snow heads-up comes only when it's dry now and rain or snow is
 likely within the hour, between 7 AM and 10 PM, at most every 3 hours. If the alert service is
 unreachable for about 20 minutes it tells you once, and again
-when it's back. Scheduled AI briefs are blueprints: `/blueprint better-weather:morning-brief`,
+when it's back. Runs never overlap, and a run that takes longer than 100 seconds gives up and counts
+as a failed check. Scheduled AI briefs are blueprints: `/blueprint better-weather:morning-brief`,
 `better-weather:week-ahead`, `better-weather:weekend-plan`.
 
 **Terminal:** `hermes better-weather now|forecast|hourly|alerts|severe|radar|satellite|air|history [place]`,

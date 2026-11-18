@@ -15,6 +15,9 @@ BASE = "https://api.weather.gov"
 # Places where the NWS API answers (US states and territories).
 NWS_COUNTRIES = {"US", "PR", "GU", "VI", "AS", "MP", "UM"}
 
+# Raised for a spot outside the NWS's alert area (a FetchError: "couldn't check", never "no alerts").
+NotCovered = iem.NotCovered
+
 # Observations older than this are skipped in favour of the next-nearest station.
 MAX_OBS_AGE_MIN = 90
 
@@ -173,19 +176,44 @@ def _kind(event: str) -> int:
     return 4
 
 
+def covers(lat: float, lon: float) -> bool | None:
+    """Whether the NWS covers the spot, by its grid lookup (a saved answer will do: it's kept for weeks); None when
+    it can't say. (Its grid and its alert area match: a 404 here is a 400 "out of bounds" from the alerts.)"""
+    try:
+        return point(lat, lon) is not None
+    except http.FetchError:
+        return None
+
+
+def _out_of_bounds(exc: http.FetchError) -> bool:
+    return exc.status == 400 and "out of bounds" in str(exc).lower()
+
+
 def alerts_at(lat: float, lon: float, *, ttl: float = http.TTL_ALERTS, backup: bool = True) -> http.Fetched:
     """Active alerts at a spot. When the NWS doesn't answer — or only a saved copy of its answer is left — the
     Iowa Environmental Mesonet's copy of its warnings (iem.py; `iem.is_copy(fetched.data)` says so), if that
-    answers; otherwise the NWS's error. The NWS is asked first every time, so it's back the moment it answers."""
+    answers; otherwise the NWS's error. The NWS is asked first every time, so it's back the moment it answers.
+
+    Raises NotCovered (a FetchError) for a spot outside the NWS's alert area — abroad — rather than "NWS down", and
+    never asks the copy there: it would come back empty, which reads as "no alerts"."""
     try:
         fetched = http.get_json(f"{BASE}/alerts/active",
                                 {"point": f"{_q(round(lat, 3))},{_q(round(lon, 3))}", "status": "actual"},
                                 ttl=ttl, max_stale=10 * 60)
     except http.FetchError as exc:
+        if _out_of_bounds(exc):
+            raise NotCovered(exc.url) from exc
         if not backup:
             raise
+        covered = covers(lat, lon)
+        if covered is False:
+            raise NotCovered(exc.url) from exc
         try:
             return iem.alerts_at(lat, lon)
+        except NotCovered as outside:
+            if covered:   # the NWS's own grid says it's covered: the copy just can't help here
+                raise exc from outside
+            raise outside from exc
         except http.FetchError as backup_exc:
             raise exc from backup_exc
     if fetched.stale and backup:   # a fresh copy beats a saved answer (a saved copy doesn't: it lacks the texts)
