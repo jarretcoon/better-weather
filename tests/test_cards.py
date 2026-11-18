@@ -351,3 +351,19 @@ def test_the_72_hour_card_reaches_the_third_day(home):
     assert lines[-1].startswith(r["hours"][68]["time"] + " ")  # 68 h out, not 45
     for hours, rows in ((12, 12), (24, 12), (48, 16), (54, 18)):
         assert len(call("weather_forecast", hourly=True, hours=hours)["card"].splitlines()) == rows + 1
+
+
+# --- 9: a statewide list says where each alert is -------------------------------------------------------------
+
+def test_statewide_alerts_say_where(home):
+    area = ("West Slope Northern Sierra Nevada; Western Plumas County/Lassen Park; Lake County; "
+            "Northern Sacramento Valley")
+    storms = {"features": [
+        _nws_alert("Winter Storm Warning", "2026-11-15T01:00:00-06:00", "2026-11-17T04:00:00-06:00", "w1", area),
+        _nws_alert("Winter Storm Warning", "2026-11-15T01:00:00-06:00", "2026-11-17T04:00:00-06:00", "w2", "Mono")]}
+    serve({"api.weather.gov/alerts/active?area=IA&status=actual": storms, DSM_ALERTS: storms})
+    card = call("weather_alerts", state="IA")["card"].splitlines()
+    assert card[3] == "   📍 West Slope Northern Sierra Nevada; Western Plumas County/Lassen Park +2"
+    assert card[6] == "   📍 Mono"
+    here = call("weather_alerts")["card"]
+    assert "Winter Storm Warning" in here and "📍" not in here  # one place: no area line

@@ -247,11 +247,14 @@ def alerts_card(r: dict[str, Any]) -> str:
             return "\n".join([f"✅ No active alerts for {where}", *warnings])
         return "\n".join([f"**Alerts · {where}**", *(warnings or ["⚠️ Alerts weren't checked here"]), *elsewhere])
     lines = [f"**Alerts · {where}**"]
+    statewide = r.get("place") is None  # a list for a whole state: say where each one is
     for a in alerts[:5]:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
         lines.append(f"{mark} **{a['event']}**{_when(a)}")
         if a.get("headline") and str(a["headline"]).strip().lower() != str(a.get("event")).strip().lower():
             lines.append(f"   {a['headline']}")
+        if statewide and a.get("area"):
+            lines.append(f"   📍 {_areas(a['area'])}")
         if a.get("life_threatening") and a.get("instruction"):
             lines.append(f"   👉 {_flat(a['instruction'], 280)}")
     if len(alerts) > 5:
@@ -276,6 +279,19 @@ def _elsewhere(warnings: list[dict[str, Any]], groups: int = 5) -> list[str]:
     if len(kinds) > groups:
         lines.append(f"…and {len(kinds) - groups} more")
     return lines
+
+
+def _areas(text: Any, limit: int = 70) -> str:
+    """An NWS area list cut after whole names: 'Mono; Southern Sierra Nevada; Kern County; Tulare' ->
+    'Mono; Southern Sierra Nevada +2'."""
+    names = [n.strip() for n in str(text).split(";") if n.strip()]
+    shown: list[str] = []
+    for n in names:
+        if shown and len("; ".join([*shown, n])) > limit:
+            break
+        shown.append(n)
+    rest = len(names) - len(shown)
+    return "; ".join(shown) + (f" +{rest}" if rest else "")
 
 
 def _flat(text: Any, limit: int) -> str:
