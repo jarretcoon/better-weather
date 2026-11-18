@@ -96,17 +96,19 @@ def tides(place: Place, clock: str) -> dict[str, Any] | None:
                          ttl=6 * 3600, max_stale=24 * 3600).data or {}
     tz = units.zone(place.timezone)
     now = now_utc().astimezone(tz)
-    out = []
+    upcoming, past = [], []
     for p in data.get("predictions") or []:
         dt = units.parse_time(str(p.get("t", "")).replace(" ", "T"))
         if dt is None:
             continue
         dt = dt.replace(tzinfo=UTC).astimezone(tz)  # asked in GMT: the station's own zone isn't known here
-        if dt < now - timedelta(hours=1):
-            continue
-        out.append({"time": units.day_clock(dt, clock, now), "type": "high" if p.get("type") == "H" else "low",
-                    "height_ft": units.num(p.get("v"))})
-    return {"station": f"{station.get('name')} ({round(best[0])} km away)", "next": out[:5]}
+        (upcoming if dt >= now else past).append(
+            {"time": units.day_clock(dt, clock, now), "type": "high" if p.get("type") == "H" else "low",
+             "height_ft": units.num(p.get("v"))})
+    out: dict[str, Any] = {"station": f"{station.get('name')} ({round(best[0])} km away)", "next": upcoming[:5]}
+    if past:  # the one just gone (the request starts an hour or two back), kept apart from what's next
+        out["last"] = past[-1]
+    return out
 
 
 def waves(place: Place, units_: str) -> dict[str, Any] | None:

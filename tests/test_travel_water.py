@@ -171,4 +171,19 @@ def test_tides_pick_the_nearest_station_and_waves_skip_inland():
     place = places.Place("Charleston, SC", 32.776, -79.933, country="US", timezone="America/New_York")
     t = water.tides(place, "12h")
     assert t["station"].startswith("Near") and t["next"][0] == {"time": "9 AM", "type": "high", "height_ft": 5.6}
+    assert "last" not in t
     assert water.waves(place, "us") is None
+
+
+def test_a_tide_that_just_passed_is_last_not_next():
+    clock.freeze_for_tests(datetime(2026, 11, 15, 14, 40, tzinfo=UTC))  # 9:40 AM EST
+    stations = {"stations": [{"id": "2", "name": "Near", "lat": 32.78, "lng": -79.92}]}
+    preds = {"predictions": [{"t": "2026-11-15 13:00", "v": "0.4", "type": "L"},  # 8 AM: past the window's start
+                             {"t": "2026-11-15 14:00", "v": "5.6", "type": "H"},  # 9 AM: 40 minutes ago
+                             {"t": "2026-11-15 20:10", "v": "0.2", "type": "L"}]}
+    http.set_transport_for_tests(httpx.MockTransport(
+        lambda r: httpx.Response(200, json=stations if "stations.json" in str(r.url) else preds)))
+    place = places.Place("Charleston, SC", 32.776, -79.933, country="US", timezone="America/New_York")
+    t = water.tides(place, "12h")
+    assert t["next"] == [{"time": "3:10 PM", "type": "low", "height_ft": 0.2}]
+    assert t["last"] == {"time": "9 AM", "type": "high", "height_ft": 5.6}
