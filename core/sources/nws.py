@@ -205,11 +205,14 @@ def alerts_at(lat: float, lon: float, *, ttl: float = http.TTL_ALERTS, backup: b
             raise NotCovered(exc.url) from exc
         if not backup:
             raise
-        if covers(lat, lon) is False:
+        covered = covers(lat, lon)
+        if covered is False:
             raise NotCovered(exc.url) from exc
         try:
             return iem.alerts_at(lat, lon)
         except NotCovered as outside:
+            if covered:   # the NWS's own grid says it's covered: the copy just can't help here
+                raise exc from outside
             raise outside from exc
         except http.FetchError as backup_exc:
             raise exc from backup_exc

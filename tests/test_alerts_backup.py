@@ -322,6 +322,8 @@ def serve_abroad(log, points=503, alerts=400, mesonet=True):
     def handler(request: httpx.Request) -> httpx.Response:
         log.append(f"{request.url.host}{request.url.path}")
         if request.url.host == "api.weather.gov" and request.url.path.startswith("/points/"):
+            if points == 200:
+                return httpx.Response(200, json={"properties": {"gridId": "XXX", "timeZone": "UTC"}})
             return httpx.Response(points, json={"title": "Data Unavailable For Requested Point", "status": points})
         if request.url.host == "api.weather.gov":
             return httpx.Response(alerts, json={"title": "Invalid Parameter", "status": alerts,
@@ -363,6 +365,14 @@ def test_with_the_nws_all_down_the_copy_refuses_a_spot_abroad():
     with pytest.raises(nws.NotCovered):
         iem.alerts_at(52.52, 13.405)
     assert not any("mesonet" in line for line in log)
+
+
+def test_a_spot_the_nws_covers_is_never_called_abroad_by_the_copys_rough_area():
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=200, alerts=503))   # its grid answers; alerts are down
+    with pytest.raises(http.FetchError) as caught:
+        nws.alerts_at(0.0, 0.0)   # (outside the copy's area: pretend the NWS covered it)
+    assert not isinstance(caught.value, nws.NotCovered) and "503" in str(caught.value)
 
 
 def test_the_copys_area_takes_in_every_part_of_the_us():
