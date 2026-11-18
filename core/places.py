@@ -46,6 +46,11 @@ _HOME_WORDS = {"", "home", "here", "my house", "my place", "house", "local", "my
 _COORDS = re.compile(r"^\s*(-?\d{1,2}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)\s*$")
 _ZIP = re.compile(r"^\d{5}(?:-\d{4})?$")
 _ICAO = re.compile(r"^[A-Z][A-Z0-9]{3}$")
+_IATA = re.compile(r"^[A-Za-z]{3}$")
+# US territories: the geocoder files them under their own country code, not under "US"
+_TERRITORIES = {"PR", "GU", "VI", "AS", "MP"}
+# places renamed since the geocoder's name list was made, asked for by their old name with their state
+_RENAMED = {("barrow", "AK"): "Utqiagvik"}  # 2016
 PLACES_FILE = "places.json"  # in the plugin's data folder, so the Desktop backend sees the same places
 _places_lock = threading.RLock()
 logger = logging.getLogger(__name__)
@@ -105,6 +110,20 @@ def _from_result(result: dict[str, Any], kind: str, note: str | None = None) -> 
     )
 
 
+def _state_code(text: str) -> str | None:
+    """'IA', 'ia', 'Iowa', 'puerto rico' -> the US state or territory code; anything else -> None."""
+    q = text.strip().rstrip(".")
+    if len(q) == 2 and q.upper() in US_STATES:
+        return q.upper()
+    return _STATE_NAMES.get(q.lower())
+
+
+def _in_state(result: dict[str, Any], code: str) -> bool:
+    country = str(result.get("country_code") or "").upper()
+    admin1 = str(result.get("admin1") or "").lower()
+    return (country == "US" and admin1 == US_STATES[code].lower()) or (code in _TERRITORIES and country == code)
+
+
 def _matches(result: dict[str, Any], qualifier: str) -> bool:
     q = qualifier.strip().lower().rstrip(".")
     if not q:
@@ -112,12 +131,11 @@ def _matches(result: dict[str, Any], qualifier: str) -> bool:
     country = str(result.get("country_code") or "").upper()
     admin1 = str(result.get("admin1") or "").lower()
     country_name = str(result.get("country") or "").lower()
-    if q.upper() in US_STATES and len(q) == 2:
-        return country == "US" and admin1 == US_STATES[q.upper()].lower()
+    code = _state_code(q)
+    if code:
+        return _in_state(result, code)
     if q.upper() in CA_PROVINCES and len(q) == 2:
         return country == "CA" and admin1 == CA_PROVINCES[q.upper()].lower()
-    if q in _STATE_NAMES:
-        return country == "US" and admin1 == q
     if q in _COUNTRY_ALIASES:
         return country == _COUNTRY_ALIASES[q]
     return q in {admin1, country_name, country.lower()} or admin1.startswith(q) or country_name.startswith(q)
@@ -128,6 +146,8 @@ def _search(text: str) -> Place:
     if not parts:
         raise PlaceError("Empty place name.")
     head, qualifiers = parts[0], parts[1:]
+    state = next((c for c in map(_state_code, qualifiers) if c), None)
+    head = _RENAMED.get((head.lower(), state), head) if state else head
     try:
         results = openmeteo.geocode(head)
         if not results and qualifiers:
@@ -142,9 +162,40 @@ def _search(text: str) -> Place:
         filtered = [r for r in results if all(_matches(r, q) for q in qualifiers)]
         if filtered:
             return _from_result(filtered[0], "search")
+        if state:
+            # a US state was named: the closest US place, never one in another country ("Barrow, AK" isn't England)
+            us = [r for r in results if str(r.get("country_code") or "").upper() in ("US", state)]
+            if not us:
+                raise PlaceError(f"Couldn't find '{parts[0]}' in {US_STATES[state]}.",
+                                 "Check the spelling, or try a ZIP code, an airport code like KDSM, or coordinates.")
+            return _from_result(us[0], "search", note=f"No exact match for '{text}'; using the closest US result.")
         return _from_result(results[0], "search",
                             note=f"No exact match for '{text}'; using the closest result.")
     return _from_result(results[0], "search")
+
+
+def _with_state_comma(text: str) -> str | None:
+    """'clarion iowa' -> 'clarion, iowa', 'des moines ia' -> 'des moines, ia': a US state at the end without a comma."""
+    if "," in text or _state_code(text):
+        return None
+    words = text.split()
+    for n in (2, 1):
+        if len(words) > n and _state_code(" ".join(words[-n:])):
+            return f"{' '.join(words[:-n])}, {' '.join(words[-n:])}"
+    return None
+
+
+def _us_airport(code: str) -> Place | None:
+    """'ORD', 'HNL': a US airport by its 3-letter code (its weather station is K + the code, or P + it in Alaska,
+    Hawaii and the Pacific)."""
+    airport = _airport("K" + code.upper())
+    if airport is not None:
+        return airport
+    airport = _airport("P" + code.upper())
+    # P codes count only out in Alaska, Hawaii and the Pacific: PRIO, say, is a weather station in Oregon
+    if airport is not None and (airport.lon <= -129 or airport.lon >= 130):
+        return airport
+    return None
 
 
 def _zip(text: str) -> Place:
@@ -298,9 +349,28 @@ def resolve(text: str | None = None, lat: Any = None, lon: Any = None, *, _depth
         airport = _airport(raw)
         if airport is not None:
             return airport
+    if _IATA.match(raw) and raw.isupper():  # "ORD", "LAX": an airport code first
+        airport = _us_airport(raw)
+        if airport is not None:
+            return airport
+
+    with_comma = _with_state_comma(raw)  # "clarion iowa": only when that finds the place in that state
+    if with_comma:
+        try:
+            place = _search(with_comma)
+            if place.note is None:
+                return place
+        except PlaceError:
+            pass
 
     try:
-        return _search(raw)
+        place = _search(raw)
+        # "ord" typed in lower case: a 3-letter word that is also a US airport code, when the search went abroad
+        if _IATA.match(raw) and raw.islower() and (place.country or "").upper() not in ("US", *_TERRITORIES):
+            airport = _us_airport(raw)
+            if airport is not None:
+                return airport
+        return place
     except PlaceError:
         # "kdsm" typed in lower case: give the airport reading a chance before giving up.
         if len(raw) == 4 and raw.isalnum() and not _ICAO.match(raw):
