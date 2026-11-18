@@ -119,7 +119,8 @@ def _peak(hourly: dict[str, Any], key: str, now: Any, tz: Any, clock: str) -> di
     if best is None:
         return None
     return {"value": round(best[0], 1) if key == "uv_index" else round(best[0]),
-            "at": units.day_clock(best[1], clock, now)}
+            "at": units.day_clock(best[1], clock, now),
+            "time": best[1].isoformat()}  # the same moment unformatted, for apps that write times in their own language
 
 
 # --- history -----------------------------------------------------------------------------------
