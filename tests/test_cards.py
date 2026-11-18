@@ -99,3 +99,62 @@ def test_a_wind_chill_of_exactly_zero_is_kept(home):
     serve({KDSM_OBS: _obs(windChill=0.0, temperature=1.0)})
     r = call("weather")
     assert r["current"]["feels_like"] == "32°F"
+
+
+# --- 2: nothing that has ended shows as if it were ahead ------------------------------------------------------
+
+def _at(iso):
+    from datetime import datetime
+
+    from better_weather.core import clock
+
+    clock.freeze_for_tests(datetime.fromisoformat(iso))
+
+
+def test_ended_forecast_periods_are_dropped(home):
+    _at("2026-11-16T03:41:00+00:00")  # 9:41 PM in Des Moines: "Overnight" and "Sunday" are over
+    r = call("weather")
+    assert r["forecast"][0]["name"] == "Sunday Night"
+    assert "**Sunday** " not in r["card"] and "**Sunday Night**" in r["card"]
+    daily = call("weather_forecast")
+    assert daily["periods"][0]["name"] == "Sunday Night"
+
+
+def test_yesterday_is_not_shown_as_the_first_day(home):
+    _at("2026-11-16T00:20:00+00:00")  # just after midnight in London; the copy starts on the 15th
+    r = call("weather_forecast", location="London, UK", days=5)
+    assert r["days"][0]["day"] == "Mon Nov 16" and len(r["days"]) == 4
+    now = call("weather", location="London, UK")
+    assert now["forecast"][0]["day"] == "Mon Nov 16"
+    assert "Sun Nov 15" not in now["card"]
+
+
+def _stale(key_url, hours, log=None):
+    """A copy of *key_url* saved *hours* ago, and the live source failing."""
+    import time
+
+    from better_weather.core import cache
+
+    key = key_url.split("?")[0]
+    cache.get_cache().put("https://" + key_url, 200, json.dumps(fixture(key_url)), time.time() - hours * 3600)
+
+    def down(request):
+        return httpx.Response(503, json={}) if str(request.url).startswith("https://" + key) else None
+
+    http.set_transport_for_tests(replay_transport(down, log))
+
+
+def test_an_old_saved_forecast_is_pointed_out_on_the_card(home):
+    _stale("api.weather.gov/gridpoints/DMX/74,50/forecast", 3)
+    r = call("weather")
+    warning = "⚠️ NWS forecast could not be refreshed; showing a copy from 3 hr ago"
+    assert warning in r["notes"] and warning in r["card"]
+    assert warning in call("weather_forecast")["card"]
+
+
+def test_a_recent_saved_copy_stays_off_the_card(home):
+    om = next(k for k in load_index() if "forecast_days=3" in k and "latitude=41.6&" in k)
+    _stale(om, 20 / 60)  # Open-Meteo's copies count as fresh for 15 min
+    r = call("weather")
+    assert "Open-Meteo could not be refreshed; showing a copy from 20 min ago" in r["notes"]
+    assert "could not be refreshed" not in r["card"]

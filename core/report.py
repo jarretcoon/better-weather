@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import UTC, datetime, time, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any, TypeVar
 
 from . import astro, display, http, units
@@ -31,6 +31,7 @@ SEVERE_EVENTS = ("tornado", "severe thunderstorm", "flash flood", "extreme wind"
 NEXT_DOOR_KM = 5.0
 FRESH_OBS_MIN = 60
 ELEVATION_WAIT_S = 10.0  # how long the station search waits for the model's answer to learn the place's height
+STALE_WARN_S = 30 * 60  # a saved copy older than this is pointed out on the card itself
 
 
 def _executor() -> ThreadPoolExecutor:
@@ -147,9 +148,10 @@ def _distance(km: Any, units_: str) -> str | None:
 
 
 def _stale_note(label: str, fetched: http.Fetched | None, notes: list[str]) -> None:
+    """Say when a saved copy stood in for a source that didn't answer; past STALE_WARN_S with ⚠️, so it's on the card."""
     if fetched is not None and fetched.stale:
-        notes.append(f"{label} could not be refreshed; showing a copy from "
-                     f"{round(fetched.age_seconds / 60)} min ago")
+        text = f"{label} could not be refreshed; showing a copy from {_ago(fetched.age_seconds / 60)}"
+        notes.append(f"⚠️ {text}" if fetched.age_seconds >= STALE_WARN_S else text)
 
 
 def _is_daytime(sun: tuple[str, str] | None, hour: int) -> bool:
@@ -221,10 +223,12 @@ def _nws_hours(fetched: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict
     return out
 
 
-def _nws_periods(fetched: http.Fetched | None, count: int, detailed_for: int) -> list[dict[str, Any]]:
+def _nws_periods(fetched: http.Fetched | None, fmt: _Fmt, count: int, detailed_for: int) -> list[dict[str, Any]]:
+    """The forecast's periods that haven't ended yet (a saved copy can be hours old: no "This Afternoon" at 9 PM)."""
     periods = (((fetched.data if fetched else None) or {}).get("properties") or {}).get("periods") or []
+    ahead = [p for p in periods if (end := units.parse_time(p.get("endTime"))) is None or end > fmt.now]
     out = []
-    for i, p in enumerate(periods[:count]):
+    for i, p in enumerate(ahead[:count]):
         start = units.parse_time(p.get("startTime"))
         entry = {
             "name": p.get("name"),
@@ -243,24 +247,24 @@ def _nws_periods(fetched: http.Fetched | None, count: int, detailed_for: int) ->
     return out
 
 
-def _om_index_after(om: http.Fetched | None, last_day: Any) -> int:
-    """Index of the first Open-Meteo day after the last NWS period (7 if unknown)."""
-    times = [str(t)[:10] for t in ((((om.data if om else None) or {}).get("daily")) or {}).get("time") or []]
-    return times.index(str(last_day)) + 1 if last_day and str(last_day) in times else 7
-
-
-def _om_days(om: http.Fetched | None, fmt: _Fmt, start: int, count: int) -> list[dict[str, Any]]:
+def _om_days(om: http.Fetched | None, fmt: _Fmt, days: int, after: date | None = None) -> list[dict[str, Any]]:
+    """Open-Meteo's days from the place's today for *days* days (only those after *after*, when given). A saved
+    copy can be from yesterday: its first day is then dropped rather than shown as today."""
     daily = (((om.data if om else None) or {}).get("daily")) or {}
     times = daily.get("time") or []
+    today = fmt.now.date()
+    last = today + timedelta(days=days - 1)
     out = []
-    for i in range(start, min(len(times), start + count)):
+    for i, stamp in enumerate(times):
+        day = units.parse_time(stamp)
+        if day is None or not today <= day.date() <= last or (after is not None and day.date() <= after):
+            continue
 
         def pick(key: str, index: int = i) -> Any:
             values = daily.get(key) or []
             return values[index] if index < len(values) else None
 
-        day = units.parse_time(times[i])
-        label = day.strftime("%a %b ") + str(day.day) if day else times[i]
+        label = day.strftime("%a %b ") + str(day.day)
         snow = units.num(pick("snowfall_sum"))
         entry = {
             "day": label,
@@ -382,12 +386,12 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
 
     next_hours = _om_hours(om, fmt, 8)  # for the card's "next hours" line only
 
-    periods = _nws_periods(fc, 3, detailed_for=2) if fc else []
+    periods = _nws_periods(fc, fmt, 3, detailed_for=2) if fc else []
     if periods:
         sources.append(f"NWS forecast ({(point or {}).get('gridId', 'NWS')})")
         _stale_note("NWS forecast", fc, notes)
     else:
-        periods = _om_days(om, fmt, 0, 2)
+        periods = _om_days(om, fmt, 2)
 
     if om is not None:
         sources.append("Open-Meteo")
@@ -419,8 +423,12 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
 
     daily = ((om.data if om else None) or {}).get("daily") or {}
     sun = {}
-    if daily.get("sunrise"):
-        sun = {"sunrise": fmt.at(daily["sunrise"][0]), "sunset": fmt.at((daily.get("sunset") or [None])[0])}
+    days_listed = [str(t)[:10] for t in daily.get("time") or []]
+    if daily.get("sunrise") and (today := fmt.now.date().isoformat()) in days_listed:  # a saved copy starts earlier
+        i = days_listed.index(today)
+        rises, sets = daily.get("sunrise") or [], daily.get("sunset") or []
+        sun = {"sunrise": fmt.at(rises[i] if i < len(rises) else None),
+               "sunset": fmt.at(sets[i] if i < len(sets) else None)}
     sky = _sky(place, fmt, daily)
 
     result = {
@@ -542,19 +550,20 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
                 sources.append("Open-Meteo")
         result["hours"] = rows
     else:
-        periods = _nws_periods(nws_fc, min(days * 2, 14), detailed_for=14) if nws_fc else []
+        periods = _nws_periods(nws_fc, fmt, min(days * 2, 14), detailed_for=14) if nws_fc else []
         if periods:
             sources.append(f"NWS forecast ({(point or {}).get('gridId', 'NWS')})")
             _stale_note("NWS forecast", nws_fc, notes)
             result["periods"] = periods
             if days > 7:
-                first = _om_index_after(om, periods[-1].get("_date"))
-                extra = _om_days(om, fmt, first, days - first)
+                last = periods[-1].get("_date")  # Open-Meteo picks up the day after the NWS's last one
+                extra = _om_days(om, fmt, days, after=date.fromisoformat(last) if last
+                                 else fmt.now.date() + timedelta(days=6))
                 if extra:
                     result["extended_days"] = extra
                     sources.append("Open-Meteo (days 8+)")
         else:
-            result["days"] = _om_days(om, fmt, 0, days)
+            result["days"] = _om_days(om, fmt, days)
             if result["days"]:
                 sources.append("Open-Meteo")
     if om is not None:
