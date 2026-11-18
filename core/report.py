@@ -522,6 +522,7 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
 
 def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place and place.note else []
+    unsure = False   # the copy answered for coordinates the NWS couldn't place: they may not be in the US at all
     if area:
         fetched = nws.alerts_in_area(area)
         label = f"{area.upper()} (statewide)"
@@ -531,13 +532,18 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     else:
         lookup_notes: list[str] = []
         point, known = _nws_lookup(place, lookup_notes)
-        if point is None and known:
+        try:
+            found = nws.alerts_at(place.lat, place.lon) if point is not None or not known else None
+        except nws.NotCovered:   # the NWS's alert area doesn't reach it: abroad after all
+            found = None
+        if found is None:
             intl = _intl_alerts(place, clock)
             return display.card_first(display.strip_private(intl), display.alerts_card(intl))
+        fetched = found
         notes.extend(lookup_notes)
-        fetched = nws.alerts_at(place.lat, place.lon)
         label = place.name
         tz = units.zone((point or {}).get("timeZone") or place.timezone)
+        unsure = not known and place.country is None and iem.is_copy(fetched.data)
     _stale_note("NWS alerts", fetched, notes)
     fmt = _Fmt("us", clock, tz)
     items = nws.normalize_alerts(fetched.data)
@@ -556,6 +562,12 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
                 if item.get(key):
                     item[key] = _shorten(item[key], limit)
         notes.append(f"{len(items)} alerts: long texts shortened; ask for one place to get its full text")
+    unsure = unsure and not items   # none in the copy says nothing about coordinates that may be abroad
+    if unsure:
+        notes.append("⚠️ Alerts couldn't be checked: the NWS didn't answer, and these coordinates may be outside "
+                     "the US")
+    if iem.is_copy(fetched.data):   # the card shows the ⚠️ line; the agent also gets what the copy lacks
+        notes += [COPY_NOTE, iem.LIMITS]
     result = {
         "where": label,
         "place": place.public() if place else None,
@@ -563,11 +575,12 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
         "alerts": [_clean(a) for a in items],
         "checked": units.clock(fmt.now, fmt.clock),
         "source": iem.SOURCE if iem.is_copy(fetched.data) else "National Weather Service",
-        "notes": notes + ([iem.LIMITS] if iem.is_copy(fetched.data) else []),
+        "notes": notes,
+        "_exact": not unsure,
     }
-    if not items:
+    if not items and not unsure:
         result["summary"] = f"No active NWS alerts for {label}."
-    return display.card_first(_clean(result) | {"count": len(items), "alerts": result["alerts"]},
+    return display.card_first(display.strip_private(_clean(result)) | {"count": len(items), "alerts": result["alerts"]},
                               display.alerts_card(result))
 
 

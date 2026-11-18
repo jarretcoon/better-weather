@@ -315,3 +315,81 @@ def test_a_flood_advisory_needs_its_polygon_too():
     assert sorted((a["event"], a["id"]) for a in found) == [
         ("Flood Advisory", f"iem:KMFL.FA.Y.0207.{clock.now_utc().year}"),
         ("Flood Watch", f"iem:KMFL.FA.A.0003.{clock.now_utc().year}")]
+
+
+def serve_abroad(log, points=503, alerts=400, mesonet=True):
+    """api.weather.gov as it answers for Berlin: its alerts say "out of bounds" (or 503: down), its grid 404."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        log.append(f"{request.url.host}{request.url.path}")
+        if request.url.host == "api.weather.gov" and request.url.path.startswith("/points/"):
+            return httpx.Response(points, json={"title": "Data Unavailable For Requested Point", "status": points})
+        if request.url.host == "api.weather.gov":
+            return httpx.Response(alerts, json={"title": "Invalid Parameter", "status": alerts,
+                                                "detail": "Parameter \"point\" is invalid: out of bounds"})
+        if request.url.host == "mesonet.agron.iastate.edu" and mesonet:
+            if request.url.path.endswith("vtec_events_bypoint.py"):
+                return httpx.Response(200, json={"events": []})
+            if request.url.path.endswith("sbw_by_point.py"):
+                return httpx.Response(200, json={"sbws": []})
+            return httpx.Response(200, json={"data": [ELSEWHERE]})
+        return httpx.Response(503)
+    return httpx.MockTransport(handler)
+
+
+def test_out_of_bounds_is_not_covered_not_nws_down_and_never_the_copy():
+    """Berlin, 2026-11-18: the NWS's 400 "out of bounds" fell through to the copy, whose empty answer read as "no
+    alerts" (pushes for a home abroad silently never came)."""
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log))
+    with pytest.raises(nws.NotCovered):
+        nws.alerts_at(52.52, 13.405)
+    assert not any("mesonet" in line for line in log)
+    assert issubclass(nws.NotCovered, http.FetchError)    # every caller already treats it as "couldn't check"
+
+
+def test_with_the_nws_down_its_grid_lookup_still_says_abroad():
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=404, alerts=503))
+    with pytest.raises(nws.NotCovered):
+        nws.alerts_at(43.65, -79.38)   # Toronto: inside the copy's coarse area, outside the NWS's grid
+    assert not any("mesonet" in line for line in log)
+
+
+def test_with_the_nws_all_down_the_copy_refuses_a_spot_abroad():
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=503, alerts=503))
+    with pytest.raises(nws.NotCovered):
+        nws.alerts_at(52.52, 13.405)
+    with pytest.raises(nws.NotCovered):
+        iem.alerts_at(52.52, 13.405)
+    assert not any("mesonet" in line for line in log)
+
+
+def test_the_copys_area_takes_in_every_part_of_the_us():
+    inside = [(41.6, -93.61), (64.838, -147.716), (71.3, -156.8), (52.9, 173.2), (21.3, -157.85), (18.4, -66.1),
+              (17.7, -64.8), (13.47, 144.75), (-14.3, -170.7), (24.55, -81.78), (26.0, -90.0), (20.0, -87.0),
+              (45.0, -130.0), (40.0, -66.0), (48.99, -97.0), (7.45, 151.85)]
+    outside = [(52.52, 13.405), (19.43, -99.13), (35.68, 139.69), (51.5, -0.12), (-33.87, 151.21), (0.0, 0.0),
+               (-13.83, -171.76)]
+    assert all(iem.in_nws_area(lat, lon) for lat, lon in inside)
+    assert not any(iem.in_nws_area(lat, lon) for lat, lon in outside)
+
+
+def test_the_alerts_card_never_says_no_alerts_for_coordinates_abroad():
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=503, alerts=503))
+    berlin = report.alerts(Place(name="52.520, 13.405", lat=52.52, lon=13.405, kind="coords"), None, "12h")
+    assert "✅" not in berlin["card"] and "outside the US" in berlin["card"]
+    toronto = report.alerts(Place(name="43.650, -79.380", lat=43.65, lon=-79.38, kind="coords"), None, "12h")
+    assert "✅" not in toronto["card"] and "may be outside the US" in toronto["card"]
+    assert "summary" not in toronto and "_exact" not in toronto
+
+
+def test_the_alerts_card_says_when_it_is_the_copy():
+    http.set_transport_for_tests(serve(None, spot=[ev("Winter Weather Advisory", "WW", "Y", 7)],
+                                       rows=[ELSEWHERE, row("WW", "Y", 7)]))
+    out = report.alerts(Place(name="Des Moines, IA", lat=41.6, lon=-93.61, country="US"), None, "12h")
+    assert report.COPY_NOTE in out["card"].splitlines()
+    http.set_transport_for_tests(serve(None))
+    quiet = report.alerts(Place(name="Des Moines, IA", lat=41.7, lon=-93.61, country="US"), None, "12h")
+    assert quiet["card"].splitlines() == ["✅ No active alerts for Des Moines, IA", report.COPY_NOTE]

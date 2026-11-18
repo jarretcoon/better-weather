@@ -37,6 +37,34 @@ _POLYGON = {("TO", "W"), ("SV", "W"), ("FF", "W"), ("EW", "W"), ("SQ", "W"), ("M
 _OFFICE = {"AFC": "PAFC", "AFG": "PAFG", "AJK": "PAJK", "HFO": "PHFO", "GUM": "PGUM", "SJU": "TJSJ", "JSJ": "TJSJ",
            "AAQ": "PAAQ", "HEB": "PHEB", "PPG": "NSTU"}
 _LINK_WFO = re.compile(r"wfo=([A-Z]{4})")
+# Where the NWS issues alerts (land, coastal and offshore waters), as generous boxes: (south, north, west, east).
+# Outside all of them the copy has nothing to say — an empty answer there would read as "no alerts" for Berlin.
+# Near a border (Toronto and Tijuana are inside a box) the NWS's own grid lookup decides: see nws.alerts_at.
+_NWS_AREA = (
+    (24.0, 50.5, -132.0, -64.0),      # the lower 48, the Great Lakes and their waters
+    (18.0, 31.0, -98.5, -79.0),       # the Gulf's offshore waters
+    (50.0, 73.0, -180.0, -129.0),     # Alaska
+    (50.0, 56.0, 165.0, 180.0),       # the western Aleutians
+    (15.0, 31.0, -180.0, -150.0),     # Hawaii
+    (14.0, 21.0, -72.0, -60.0),       # Puerto Rico and the Virgin Islands
+    (0.0, 22.0, 130.0, 175.0),        # Guam, the Marianas and the islands Guam's office covers
+    (-15.5, -10.0, -171.3, -168.0),   # American Samoa
+)
+NOT_COVERED = "this spot is outside the National Weather Service's alert area"
+
+
+class NotCovered(http.FetchError):
+    """The spot is outside the National Weather Service's alert area (abroad): its alerts can't be checked there,
+    which is never the same as "no alerts" (a FetchError, so every caller already treats it as "couldn't check")."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__(url, NOT_COVERED, 400)
+
+
+def in_nws_area(lat: float, lon: float) -> bool:
+    """False when the spot is clearly outside where the NWS issues alerts (a coarse test: no network)."""
+    lon = (lon + 180.0) % 360.0 - 180.0
+    return any(south <= lat <= north and west <= lon <= east for south, north, west, east in _NWS_AREA)
 
 
 def office(wfo: str, link: str = "") -> str:
@@ -77,7 +105,9 @@ def alerts_at(lat: float, lon: float) -> http.Fetched:
     """The NWS alerts in effect at the spot, from the mesonet, as an api.weather.gov `alerts/active` answer.
 
     Raises FetchError when it can't say — an answer that doesn't look right, a copy that has stalled, or a surprise in
-    it — so a caller never takes "couldn't check" for "no alerts"."""
+    it — so a caller never takes "couldn't check" for "no alerts"; NotCovered for a spot outside the NWS's area."""
+    if not in_nws_area(lat, lon):
+        raise NotCovered(BASE)
     try:
         return _read(lat, lon)
     except http.FetchError:
