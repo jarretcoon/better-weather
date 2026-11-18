@@ -20,6 +20,19 @@ def test_aqi_and_uv_bands():
     assert climate.pollen_level(0) == "none" and climate.pollen_level(150) == "high"
 
 
+def test_uv_level_rounds_to_the_whole_index_first():
+    assert [climate.uv_level(v) for v in (2.2, 2.5, 5.4, 5.5, 7.3, 10.4, 10.6, 0.0)] == [
+        "Low", "Moderate", "Moderate", "High", "High", "Very high", "Extreme", "Low"]
+    assert climate.uv_level(None) is None
+
+
+def test_air_bands_the_rounded_uv():
+    payload = {"timezone": "America/Chicago", "utc_offset_seconds": -21600, "current": {"uv_index": 2.2},
+               "hourly": {"time": [], "us_aqi": [], "uv_index": []}}
+    http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(200, json=payload)))
+    assert climate.air(_place(), "12h")["uv_now"] == {"index": 2.2, "level": "Low"}
+
+
 def test_air_flags_smoke(monkeypatch):
     payload = {"timezone": "America/Chicago", "utc_offset_seconds": -21600,
                "current": {"us_aqi": 160, "pm2_5": 70.0, "ozone": 40, "uv_index": 1.0, "us_aqi_pm2_5": 160,

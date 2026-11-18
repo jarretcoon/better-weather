@@ -6,6 +6,7 @@ reanalysis via Open-Meteo, which is modelled; answers mark those values as estim
 
 from __future__ import annotations
 
+import math
 from datetime import date, timedelta
 from statistics import mean
 from typing import Any
@@ -39,6 +40,11 @@ def band(value: float | None, bands: tuple[tuple[float, str], ...]) -> str | Non
         if value <= top:
             return label
     return bands[-1][1]
+
+
+def uv_level(index: float | None) -> str | None:
+    """WHO's band for a UV index, read as the whole number it's reported as: 2.2 is Low, 7.3 High (not Very high)."""
+    return None if index is None else band(math.floor(index + 0.5), UV_BANDS)
 
 
 def pollen_level(grains: float | None) -> str | None:
@@ -79,7 +85,7 @@ def air(place: Place, clock: str) -> dict[str, Any]:
             "pm2_5_ugm3": units.num(cur.get("pm2_5")),
             "ozone_ugm3": units.num(cur.get("ozone")),
         },
-        "uv_now": {"index": units.num(cur.get("uv_index")), "level": band(units.num(cur.get("uv_index")), UV_BANDS)},
+        "uv_now": {"index": units.num(cur.get("uv_index")), "level": uv_level(units.num(cur.get("uv_index")))},
         "source": "Open-Meteo air quality (CAMS model forecast)",
         "notes": [],
     }
@@ -92,7 +98,7 @@ def air(place: Place, clock: str) -> dict[str, Any]:
         result["next_24h_worst_air"] = {**peak_aqi, "category": band(peak_aqi["value"],
                                                                       US_AQI_BANDS if us else EU_AQI_BANDS)}
     if peak_uv:
-        result["next_24h_peak_uv"] = {**peak_uv, "level": band(peak_uv["value"], UV_BANDS)}
+        result["next_24h_peak_uv"] = {**peak_uv, "level": uv_level(peak_uv["value"])}
     pm25 = units.num(cur.get("pm2_5"))
     if pm25 is not None and pm25 >= 35:
         result["notes"].append("Fine-particle levels this high usually mean smoke or haze; "
