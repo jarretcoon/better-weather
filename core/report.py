@@ -32,6 +32,7 @@ NEXT_DOOR_KM = 5.0
 FRESH_OBS_MIN = 60
 ELEVATION_WAIT_S = 10.0  # how long the station search waits for the model's answer to learn the place's height
 STALE_WARN_S = 30 * 60  # a saved copy older than this is pointed out on the card itself
+FEED_WARN_MIN = 20  # likewise MeteoAlarm's list (copies of it answer for up to 30 min: sources/intl_alerts.py)
 
 
 def _executor() -> ThreadPoolExecutor:
@@ -676,6 +677,8 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
         elsewhere = (counts.get("orange", 0) + counts.get("red", 0)
                      - sum(1 for a in found if a.get("level") in ("orange", "red")))
         notes = []
+        if eu["age_min"] > FEED_WARN_MIN:  # the last copy answers while a new one downloads, or when it can't
+            notes.append(f"⚠️ MeteoAlarm's list is from {_ago(eu['age_min'])}; newer warnings may be missing")
         if eu["exact"]:  # every active warning had a map area, so "none here" is a real answer
             if not found:
                 notes.append(f"No active warning in {eu['country']} covers this exact spot.")

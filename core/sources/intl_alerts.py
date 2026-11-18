@@ -24,10 +24,11 @@ TEXT_LIMIT = 2500
 REGIONS_KEPT = 8  # area names kept per warning; "more_regions" counts the rest
 # A country's MeteoAlarm feed is downloaded again after FEED_FRESH. Some are big (Germany's is ~8 MB: 6-20 s), so
 # until FEED_KEEP the last copy keeps answering while the new one downloads in the background: only the very first
-# visitor (a fresh process) waits for it.
+# visitor (a fresh process) waits for it. Each copy keeps the time MeteoAlarm actually answered (a saved copy can be
+# older than the moment it was read), and europe() gives its age so answers can say when it's getting old.
 FEED_FRESH = 10 * 60
 FEED_KEEP = 30 * 60
-_feeds: dict[str, tuple[float, dict[str, Any]]] = {}
+_feeds: dict[str, tuple[float, dict[str, Any]]] = {}  # url -> (when MeteoAlarm answered, time.time(); the feed)
 _refreshing: set[str] = set()
 _feeds_lock = threading.Lock()
 logger = logging.getLogger(__name__)
@@ -133,15 +134,22 @@ def _names_in(area: str, names: list[str]) -> bool:
     return bool(key) and key in names
 
 
-def _download(url: str) -> dict[str, Any]:
-    return http.get_json(url, ttl=FEED_FRESH, max_stale=FEED_KEEP).data or {}
+def _download(url: str) -> tuple[float, dict[str, Any]]:
+    """(when MeteoAlarm answered, the feed): a saved copy keeps its own time."""
+    fetched = http.get_json(url, ttl=FEED_FRESH, max_stale=FEED_KEEP)
+    return fetched.fetched_at, fetched.data or {}
+
+
+def _keep(url: str, copy: tuple[float, dict[str, Any]]) -> None:
+    with _feeds_lock:
+        kept = _feeds.get(url)
+        if kept is None or copy[0] >= kept[0]:  # a failed refresh's saved copy never replaces a newer one
+            _feeds[url] = copy
 
 
 def _refresh(url: str) -> None:
     try:
-        data = _download(url)
-        with _feeds_lock:
-            _feeds[url] = (time.monotonic(), data)
+        _keep(url, _download(url))
     except Exception as exc:  # the older copy keeps answering until FEED_KEEP; after that a visitor waits again
         logger.warning("MeteoAlarm refresh of %s failed: %s", url, exc)
     finally:
@@ -149,21 +157,21 @@ def _refresh(url: str) -> None:
             _refreshing.discard(url)
 
 
-def _feed(url: str) -> dict[str, Any]:
-    now = time.monotonic()
+def _feed(url: str) -> tuple[float, dict[str, Any]]:
+    """(when MeteoAlarm answered, the feed)."""
+    now = time.time()
     with _feeds_lock:
         kept = _feeds.get(url)
         if kept and now - kept[0] < FEED_FRESH:
-            return kept[1]
+            return kept
         if kept and now - kept[0] < FEED_KEEP:
             if url not in _refreshing:
                 _refreshing.add(url)
                 threading.Thread(target=_refresh, args=(url,), name="meteoalarm-refresh", daemon=True).start()
-            return kept[1]
-    data = _download(url)
-    with _feeds_lock:
-        _feeds[url] = (time.monotonic(), data)
-    return data
+            return kept
+    copy = _download(url)
+    _keep(url, copy)
+    return copy
 
 
 def europe(country: str, lat: float, lon: float, names: Iterable[str | None] = ()) -> dict[str, Any]:
@@ -172,7 +180,7 @@ def europe(country: str, lat: float, lon: float, names: Iterable[str | None] = (
     wanted = [n for n in (_area_key(x) for x in names) if len(n) >= 3]
     named: list[dict[str, Any]] = []
     unmapped = 0  # active warnings with no map area: a spot can't be called clear while any exist
-    data = _feed(METEOALARM.format(slug=slug))
+    fetched_at, data = _feed(METEOALARM.format(slug=slug))
     exact: list[dict[str, Any]] = []
     big: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
@@ -215,4 +223,5 @@ def europe(country: str, lat: float, lon: float, names: Iterable[str | None] = (
     return {"exact_matches": exact, "region_name_matches": named, "orange_and_red_in_country": big[:12],
             "country_counts": counts,
             "has_shapes": has_shapes, "exact": unmapped == 0,
+            "age_min": max(0, round((time.time() - fetched_at) / 60)),
             "country": slug.replace("-", " ").title(), "source": "MeteoAlarm (EUMETNET)"}

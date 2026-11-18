@@ -263,3 +263,31 @@ def test_no_tool_names_reach_a_person():
         quoted = re.findall(r'"[^"\n]*"', text)
         leaks = [q for q in quoted if re.search(r"\bweather_(alerts|forecast|severe|places|air|history)\b", q)]
         assert not leaks, (name, leaks)
+
+
+# --- 5: MeteoAlarm's list says when it's getting old ---------------------------------------------------------
+
+def test_an_old_meteoalarm_copy_is_flagged_and_keeps_its_real_age(home):
+    import time
+
+    from better_weather.core import cache, places, report
+    from better_weather.core.sources import intl_alerts
+
+    url = intl_alerts.METEOALARM.format(slug="germany")
+    feed = {"warnings": [_ma_warning("gale-force gusts", 3, ["Berlin"])]}
+    cache.get_cache().put(http.cache_key(url, None), 200, json.dumps(feed), time.time() - 25 * 60)
+    http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(503, json={})))  # MeteoAlarm down
+    berlin = places.Place("Berlin, DE", 52.52, 13.41, country="DE", timezone="Europe/Berlin")
+    r = report.alerts(berlin, None, "12h")
+    note = "⚠️ MeteoAlarm's list is from 25 min ago; newer warnings may be missing"
+    assert note in r["notes"] and note in r["card"] and "Gale-force gusts" in r["card"]
+    # the in-process copy keeps MeteoAlarm's own time, not the moment it was read: it's due a refresh already
+    assert time.time() - intl_alerts._feeds[url][0] >= 25 * 60 - 5
+
+
+def test_a_fresh_meteoalarm_list_needs_no_note(home):
+    from better_weather.core import places, report
+
+    _meteoalarm([_ma_warning("gale-force gusts", 3, ["Berlin"])])
+    r = report.alerts(places.Place("Berlin, DE", 52.52, 13.41, country="DE", timezone="Europe/Berlin"), None, "12h")
+    assert not any("MeteoAlarm's list" in n for n in r["notes"])
