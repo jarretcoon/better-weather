@@ -464,3 +464,38 @@ def test_slow_extras_never_cost_a_warning(monkeypatch):
         release.set()
     assert message.startswith("🚨 TORNADO WARNING") and "☔" not in message
     assert state["sent"] and "rain_at" not in state
+
+
+# --- a saved place without a time zone (the audit of 0.9.2) -----------------------------------------
+
+def _no_zone_world(points_zone=None, model=None):
+    cache.use_memory_cache_for_tests()
+
+    def handler(request):
+        if "open-meteo" in str(request.url):
+            return httpx.Response(200, json=model) if model else httpx.Response(503)
+        if request.url.path.startswith("/points/"):
+            if points_zone:
+                return httpx.Response(200, json={"properties": {"timeZone": points_zone}})
+            return httpx.Response(503)
+        return httpx.Response(200, json={"features": [_feature("a1", "Tornado Warning")]})
+    return httpx.MockTransport(handler)
+
+
+def test_no_saved_zone_uses_the_places_own_never_utc():
+    """`timezone: None` in watch.json made every time UTC ("until 9:45 PM" for a 3:45 PM CST end)."""
+    config = {**CONFIG, "timezone": None}
+    http.set_transport_for_tests(_no_zone_world(points_zone="America/Chicago"))
+    assert watch.check(config, {})[0].startswith("🚨 TORNADO WARNING — Des Moines, IA, until 3:45 PM")
+    http.set_transport_for_tests(_no_zone_world())     # no lookup answers: the alert's own (local) offset
+    assert watch.check(config, {})[0].startswith("🚨 TORNADO WARNING — Des Moines, IA, until 3:45 PM")
+
+
+def test_no_saved_zone_keeps_the_rain_hours_local():
+    """5:30 PM in Des Moines is 23:30 UTC: past the 10 PM cutoff if the zone were UTC."""
+    _at("2026-10-20T17:30")
+    model = {**_model("2026-10-20T18:00", [12.0] * 4, chance=80, precip=1.5), "timezone": "America/Chicago",
+             "utc_offset_seconds": -5 * 3600}
+    http.set_transport_for_tests(_no_zone_world(model=model))
+    message = watch.check({**RAIN, "timezone": None}, {})[0]
+    assert message.endswith("☔ Rain likely to start in Des Moines, IA within the hour.")

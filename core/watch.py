@@ -23,7 +23,7 @@ import re
 import tempfile
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -243,6 +243,23 @@ def _failed(state: dict[str, Any]) -> str | None:
     return None
 
 
+def _zone(config: dict[str, Any], lat: float, lon: float) -> tzinfo | None:
+    """The place's own zone: the saved one, else looked up (the NWS's grid, then Open-Meteo; both kept for weeks).
+    Never UTC by default: that shifted the rain hours and the 3 PM freeze check. None only when nothing answers."""
+    name = config.get("timezone")
+    if not name:
+        try:
+            name = (nws.point(lat, lon) or {}).get("timeZone")
+        except http.FetchError:
+            name = None
+    if not name:
+        try:
+            name = openmeteo.timezone_at(lat, lon)
+        except http.FetchError:
+            name = None
+    return units.zone(str(name)) if name else None
+
+
 def check(config: dict[str, Any], state: dict[str, Any], *,
           deadline: float | None = None) -> tuple[str, dict[str, Any]]:
     """One pass. Returns (message or "", new state). Pure apart from the network fetches. With a `deadline`
@@ -250,17 +267,22 @@ def check(config: dict[str, Any], state: dict[str, Any], *,
     place = str(config.get("name") or "home")
     lat, lon = float(config["lat"]), float(config["lon"])
     level = str(config.get("level")) if config.get("level") in LEVELS else "watches"
-    tz = units.zone(config.get("timezone"))
-    now = now_utc().astimezone(tz)
+    tz = _zone(config, lat, lon)
+    now = now_utc().astimezone(tz or UTC)
+    clock = config.get("clock") or "12h"
+
+    def local(dt: datetime) -> datetime:   # zone unknown: the time's own offset (the NWS's times are local)
+        return dt.astimezone(tz) if tz is not None else dt
 
     def fmt_time(value: Any, after: Any = None) -> str | None:
         """'3 PM', 'tomorrow 3 PM', 'Wed 3 PM'; just '9 PM' on the day of `after` ('from tomorrow 3 AM to 9 PM')."""
         dt, first = units.parse_time(value), units.parse_time(after)
         if dt is None:
             return None
-        if first is not None and first.tzinfo is not None and first.astimezone(tz).date() == dt.astimezone(tz).date():
-            return units.clock(dt.astimezone(tz), config.get("clock") or "12h")
-        return units.day_clock(dt.astimezone(tz), config.get("clock") or "12h", now)
+        when = local(dt)
+        if first is not None and first.tzinfo is not None and local(first).date() == when.date():
+            return units.clock(when, clock)
+        return units.day_clock(when, clock, now.astimezone(when.tzinfo) if when.tzinfo else now)
 
     messages: list[str] = []
     state = copy.deepcopy(state)  # never mutate the caller's copy (it is what gets saved on a crash)
@@ -446,6 +468,8 @@ def _extras(config: dict[str, Any], state: dict[str, Any], lat: float, lon: floa
         data = openmeteo.forecast(lat, lon, 2, past_days=FREEZE_QUIET_NIGHTS).data or {}
     except http.FetchError:
         return []
+    if data.get("timezone") or data.get("utc_offset_seconds") is not None:   # its hours are in its own zone
+        now = now.astimezone(units.zone(data.get("timezone"), data.get("utc_offset_seconds")))
     rows = _rows(data.get("hourly") or {}, now)
     out = []
     if config.get("freeze"):
