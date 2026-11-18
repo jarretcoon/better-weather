@@ -45,6 +45,8 @@ def isolated(request: pytest.FixtureRequest):
     live = request.node.get_closest_marker("live") is not None
     settings.reset_for_tests()
     cache.use_memory_cache_for_tests()
+    from better_weather.core.sources import intl_alerts
+    intl_alerts._feeds.clear()  # the in-process copies of MeteoAlarm's feeds
     nws.forget_failures()
     if live:
         http.set_transport_for_tests(None, no_sleep=False)
