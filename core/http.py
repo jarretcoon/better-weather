@@ -11,7 +11,9 @@ import logging
 import random
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -26,6 +28,11 @@ USER_AGENT = "(better-weather Hermes plugin, github.com/jarretcoon/better-weathe
 TIMEOUT = httpx.Timeout(connect=6.0, read=15.0, write=10.0, pool=10.0)
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 ATTEMPTS = 3
+# While someone waits on a chat answer (report.py's fetches): two shorter tries, so a hanging service gives up in
+# ~20 s rather than ~60. Everything else, like the cron warning pushes and background refreshes, keeps the above.
+INTERACTIVE_TIMEOUT = httpx.Timeout(connect=4.0, read=10.0, write=10.0, pool=5.0)
+INTERACTIVE_ATTEMPTS = 2
+_patience: ContextVar[tuple[int, httpx.Timeout]] = ContextVar("better_weather_patience", default=(ATTEMPTS, TIMEOUT))
 
 # TTLs (seconds) by kind of data; callers pick one.
 TTL_ALERTS = 60
@@ -103,18 +110,30 @@ def cache_key(url: str, params: Mapping[str, Any] | None) -> str:
     return url + "?" + urlencode(sorted((k, str(v)) for k, v in params.items()))
 
 
+@contextmanager
+def interactive() -> Iterator[None]:
+    """Fetches inside this block (in this thread) use the interactive tries and timeouts."""
+    token = _patience.set((INTERACTIVE_ATTEMPTS, INTERACTIVE_TIMEOUT))
+    try:
+        yield
+    finally:
+        _patience.reset(token)
+
+
 def _attempt(url: str, params: Mapping[str, Any] | None, headers: Mapping[str, str] | None) -> httpx.Response:
     last_error: Exception | None = None
-    for attempt in range(ATTEMPTS):
+    attempts, timeout = _patience.get()
+    for attempt in range(attempts):
         if attempt:
             _sleep(0.6 * (2 ** (attempt - 1)) + random.uniform(0, 0.3))
         try:
-            response = _get_client().get(url, params=dict(params) if params else None, headers=headers)
+            response = _get_client().get(url, params=dict(params) if params else None, headers=headers,
+                                         timeout=timeout)
         except httpx.HTTPError as exc:  # timeouts, DNS, resets
             last_error = exc
             logger.debug("better-weather: %s attempt %d failed: %s", url, attempt + 1, exc)
             continue
-        if response.status_code in RETRY_STATUSES and attempt < ATTEMPTS - 1:
+        if response.status_code in RETRY_STATUSES and attempt < attempts - 1:
             last_error = FetchError(url, f"HTTP {response.status_code}", response.status_code)
             continue
         return response

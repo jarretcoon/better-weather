@@ -10,6 +10,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from time import monotonic
 from typing import Any, TypeVar
 
 from . import astro, display, http, units
@@ -24,7 +25,9 @@ COPY_NOTE = "⚠️ The NWS didn't answer: alerts are from Iowa State's copy of 
 
 _pool: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
-FETCH_WAIT_S = 45.0
+# One deadline for all of an answer's fetches (they run side by side): a source that misses it becomes a note. Was
+# 45 s per source, waited for one after another: a hanging NWS held the now card up for 100 s.
+REPORT_WAIT_S = 40.0
 SEVERE_EVENTS = ("tornado", "severe thunderstorm", "flash flood", "extreme wind",
                  "special weather statement")
 # The now card names where its reading came from unless it's a station right next door with an hour-fresh report.
@@ -44,16 +47,32 @@ def _executor() -> ThreadPoolExecutor:
     return _pool
 
 
+def _interactive(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    with http.interactive():  # someone is waiting: fewer, shorter tries (http.py)
+        return fn(*args, **kwargs)
+
+
+class _Jobs:
+    """An answer's background fetches, all sharing one deadline (set when the answer starts)."""
+
+    def __init__(self) -> None:
+        self.deadline = monotonic() + REPORT_WAIT_S
+
+    def start(self, label: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> _Job:
+        return _Job(label, self.deadline, fn, *args, **kwargs)
+
+
 class _Job:
     """A background fetch whose failure becomes a note instead of an exception."""
 
-    def __init__(self, label: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+    def __init__(self, label: str, deadline: float, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         self.label = label
-        self.future: Future[Any] = _executor().submit(fn, *args, **kwargs)
+        self.deadline = deadline
+        self.future: Future[Any] = _executor().submit(_interactive, fn, *args, **kwargs)
 
     def result(self, notes: list[str]) -> Any:
         try:
-            return self.future.result(timeout=FETCH_WAIT_S)
+            return self.future.result(timeout=max(0.0, self.deadline - monotonic()))
         except http.FetchError as exc:
             notes.append(f"{self.label} unavailable ({exc})")
         except TimeoutError:
@@ -114,7 +133,8 @@ def _nws_lookup(place: Place, notes: list[str]) -> tuple[dict[str, Any] | None, 
     if not place.maybe_us:
         return None, True
     try:
-        return nws.point(place.lat, place.lon), True
+        with http.interactive():
+            return nws.point(place.lat, place.lon), True
     except http.FetchError as exc:
         notes.append(f"NWS lookup failed ({exc}); using Open-Meteo instead")
         return None, False
@@ -330,16 +350,17 @@ def _hpa_to_pa(value: Any) -> float | None:
 def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place.note else []
     sources: list[str] = []
+    jobs = _Jobs()
     point, nws_known = _nws_lookup(place, notes)
     metric = units_ == "metric"
 
-    om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
-    intl_job = _Job("Official alerts", _intl_alerts, place, clock) if not point and nws_known else None
+    om_job = jobs.start("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
+    intl_job = jobs.start("Official alerts", _intl_alerts, place, clock) if not point and nws_known else None
     obs_job = fc_job = al_job = None
     if point:
-        obs_job = _Job("NWS observation", _observation, point, place, om_job.future)
-        fc_job = _Job("NWS forecast", nws.forecast, point, metric=metric)
-        al_job = _Job("NWS alerts", nws.alerts_at, place.lat, place.lon)
+        obs_job = jobs.start("NWS observation", _observation, point, place, om_job.future)
+        fc_job = jobs.start("NWS forecast", nws.forecast, point, metric=metric)
+        al_job = jobs.start("NWS alerts", nws.alerts_at, place.lat, place.lon)
 
     om = om_job.result(notes)
     obs = obs_job.result(notes) if obs_job else None
@@ -548,12 +569,13 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
     sources: list[str] = []
     days = max(1, min(int(days or 7), 16))
     hours = max(1, min(int(hours or 24), 72))
+    jobs = _Jobs()
     point = _nws_point(place, notes)
     metric = units_ == "metric"
 
-    om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon,
-                  max(days, 4 if hourly else days))
-    nws_job = _Job("NWS forecast", nws.forecast, point, hourly=hourly, metric=metric) if point else None
+    om_job = jobs.start("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon,
+                        max(days, 4 if hourly else days))
+    nws_job = jobs.start("NWS forecast", nws.forecast, point, hourly=hourly, metric=metric) if point else None
     om = om_job.result(notes)
     nws_fc = nws_job.result(notes) if nws_job else None
     fmt = _Fmt(units_, clock, _place_tz(place, point, om))
@@ -732,12 +754,13 @@ def _offset_of_first_alert(data: Any) -> tzinfo:
 
 def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place.note else []
+    jobs = _Jobs()
     point, known = _nws_lookup(place, notes)
-    om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
+    om_job = jobs.start("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
     # SPC is its own service: with the NWS grid lookup down, still try it for a lower-48 spot
     in_spc_area = (bool(point) or not known) and radar.in_conus(place.lat, place.lon)
-    spc_job = _Job("SPC outlook", spc.risk_at, place.lat, place.lon) if in_spc_area else None
-    al_job = _Job("NWS alerts", nws.alerts_at, place.lat, place.lon) if point else None
+    spc_job = jobs.start("SPC outlook", spc.risk_at, place.lat, place.lon) if in_spc_area else None
+    al_job = jobs.start("NWS alerts", nws.alerts_at, place.lat, place.lon) if point else None
     om = om_job.result(notes)
     risk = spc_job.result(notes) if spc_job else None
     al = al_job.result(notes) if al_job else None

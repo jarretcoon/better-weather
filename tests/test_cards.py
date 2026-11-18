@@ -4,6 +4,7 @@ import copy
 import json
 
 import httpx
+import pytest
 from better_weather.core import http, tools
 from fixturekit import FIXTURES, load_index, replay_transport
 
@@ -291,3 +292,51 @@ def test_a_fresh_meteoalarm_list_needs_no_note(home):
     _meteoalarm([_ma_warning("gale-force gusts", 3, ["Berlin"])])
     r = report.alerts(places.Place("Berlin, DE", 52.52, 13.41, country="DE", timezone="Europe/Berlin"), None, "12h")
     assert not any("MeteoAlarm's list" in n for n in r["notes"])
+
+
+# --- 6: a hanging source can't hold the answer up for minutes -------------------------------------------------
+
+def test_one_deadline_for_all_of_an_answers_fetches(home, monkeypatch):
+    import threading
+    import time
+
+    from better_weather.core import report
+    from better_weather.core.sources import nws
+
+    hang = threading.Event()
+
+    def stuck(*_a, **_k):
+        hang.wait(10)
+        raise http.FetchError("https://api.weather.gov/", "hung")
+
+    monkeypatch.setattr(report, "REPORT_WAIT_S", 0.5)
+    monkeypatch.setattr(nws, "forecast", stuck)
+    monkeypatch.setattr(nws, "alerts_at", stuck)
+    monkeypatch.setattr(nws, "latest_observation", stuck)
+    try:
+        t = time.monotonic()
+        r = call("weather")
+        took = time.monotonic() - t
+    finally:
+        hang.set()
+    # three sources hung: one shared half second in all, not half a second each
+    assert took < 0.9, took
+    assert {"NWS observation timed out", "NWS forecast timed out", "NWS alerts timed out"} <= set(r["notes"])
+    assert r["current"]["source"] == "Open-Meteo model estimate" and "⚠️ Alerts could not be checked" in r["card"]
+
+
+def test_interactive_fetches_try_twice_with_shorter_timeouts():
+    seen = []
+
+    def down(request):
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(503, json={})
+
+    http.set_transport_for_tests(httpx.MockTransport(down))
+    with http.interactive(), pytest.raises(http.FetchError):
+        http.get_json("https://example.test/slow", ttl=60)
+    assert len(seen) == 2 and seen[0]["read"] == http.INTERACTIVE_TIMEOUT.read
+    seen.clear()
+    with pytest.raises(http.FetchError):  # outside (the cron pushes, background refreshes): the patient defaults
+        http.get_json("https://example.test/slow2", ttl=60)
+    assert len(seen) == http.ATTEMPTS == 3 and seen[0]["read"] == http.TIMEOUT.read
