@@ -5,7 +5,8 @@ alerts couldn't be checked. Iowa State's mesonet keeps a near-real-time copy of 
 advisory (VTEC) from every office. This turns its answer for one spot into the NWS API's own shape — the same
 VTEC codes, so a warning keeps the key it was pushed under when the NWS comes back — with what it lacks said
 plainly: the full text of each (a link to it instead) and the few products that aren't VTEC (special weather
-statements). Only the products in effect now are kept: the spot's events joined with the live list.
+statements, avalanche watches and the like). Only the products in effect now are kept: the spot's events joined
+with the live list.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ from ..clock import now_utc
 BASE = "https://mesonet.agron.iastate.edu"
 SOURCE = "NWS warnings via Iowa State's mesonet"
 LIMITS = ("The National Weather Service's alert service didn't answer, so these come from the Iowa Environmental "
-          "Mesonet's copy of its warnings, watches and advisories: special weather statements and the full text "
-          "of each aren't in it.")
+          "Mesonet's copy of its warnings, watches and advisories: it leaves out the full text of each and some "
+          "kinds of alert, such as special weather statements and avalanche watches.")
 TTL = 120
 _GONE = {"CAN", "EXP", "UPG"}    # an event's last action that ends it (in every zone it covers)
 _LOOKBACK_DAYS = 45              # if the live list can't say how far back its oldest event goes
