@@ -26,6 +26,7 @@ def test_city_country():
 def test_zip_code_is_us_only():
     place = places.resolve("50309")
     assert place.kind == "zip" and place.country == "US" and "50309" in place.name
+    assert places.resolve(50309).name == place.name, "a ZIP code sent as a number"  # type: ignore[arg-type]
 
 
 def test_airport_code():

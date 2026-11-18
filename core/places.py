@@ -436,7 +436,7 @@ def resolve(text: str | None = None, lat: Any = None, lon: Any = None, *, _depth
             raise PlaceError("lat/lon out of range.")
         return _coords(la, lo)
 
-    raw = (text or "").strip()
+    raw = "" if text is None else str(text).strip()  # a ZIP code can arrive as a number
     if raw.lower() in _HOME_WORDS:
         home = settings.current().home
         if not home:
