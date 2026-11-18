@@ -25,6 +25,7 @@ LIMITS = ("The National Weather Service's alert service didn't answer, so these 
 TTL = 120
 _GONE = {"CAN", "EXP", "UPG"}    # an event's last action that ends it (in every zone it covers)
 _LOOKBACK_DAYS = 45              # if the live list can't say how far back its oldest event goes
+_AHEAD_DAYS = 10                 # at least this far ahead: events that start later than the live list says
 _STALE_AFTER = timedelta(hours=2)  # newest update anywhere in the country older than this: the copy has stalled
 # Storm-based warnings drawn as polygons: the mesonet's by-point list matches them by county, so they need a hit in
 # its polygon lookup too — the NWS matches them by polygon. (Flood warnings stay matched by county: over-warning is
@@ -96,11 +97,15 @@ def _read(lat: float, lon: float) -> http.Fetched:
     # in effect: any of an event's rows (one per group of zones) is still going
     active = {(r.get("wfo"), r.get("phenomena"), r.get("significance"), r.get("eventid"), r.get("year"))
               for r in rows if isinstance(r, dict) and str(r.get("status") or "") not in _GONE}
-    oldest = min((t for t in (_when(r.get("issue")) for r in rows if isinstance(r, dict)) if t),
-                 default=now - timedelta(days=_LOOKBACK_DAYS))
+    starts = [t for t in (_when(r.get("issue")) for r in rows if isinstance(r, dict)) if t]
+    oldest = min(starts, default=now - timedelta(days=_LOOKBACK_DAYS))
+    # The by-point list picks events by their START, and its end date is exclusive: it must reach past the latest
+    # start of anything in effect (a watch can start days out), or an alert starting after the next UTC midnight is
+    # missed — a false "has ended" push during an NWS outage, then a second "new" push when the NWS is back.
+    latest = max(starts, default=now)
     window = {"lat": round(lat, 3), "lon": round(lon, 3),
               "sdate": (min(oldest, now) - timedelta(days=1)).date().isoformat(),
-              "edate": (now + timedelta(days=1)).date().isoformat()}
+              "edate": (max(latest + timedelta(days=2), now + timedelta(days=_AHEAD_DAYS))).date().isoformat()}
     spot = http.get_json(f"{BASE}/json/vtec_events_bypoint.py", window, ttl=TTL, max_stale=15 * 60)
     events = spot.data.get("events") if isinstance(spot.data, dict) else None
     if not isinstance(events, list):

@@ -43,6 +43,14 @@ def nws_feature(ident, event, action="NEW", etn="0012", ph="TO", sig="W", vtec=T
                            "onset": iso(-0.5), "description": "...", "instruction": "", "parameters": params}}
 
 
+def in_window(request: httpx.Request, items):
+    """What the mesonet's by-point lookups really return: events that START on or after `sdate` and before `edate`
+    (exclusive, UTC dates)."""
+    sdate, edate = request.url.params.get("sdate"), request.url.params.get("edate")
+    assert sdate and edate, "the mesonet's by-point lookups need a window"
+    return [i for i in items if "issue" not in i or sdate <= i["issue"][:10] < edate]
+
+
 def serve(nws_features=None, spot=(), rows=(ELSEWHERE,), mesonet_up=True, log=None, polygons=None):
     """api.weather.gov answers `nws_features` (None = 503); the mesonet answers `spot` and `rows`, and its polygon
     lookup `polygons` (None = it fails)."""
@@ -52,14 +60,14 @@ def serve(nws_features=None, spot=(), rows=(ELSEWHERE,), mesonet_up=True, log=No
         if request.url.host == "mesonet.agron.iastate.edu" and request.url.path.endswith("sbw_by_point.py"):
             if polygons is None or not mesonet_up:
                 return httpx.Response(503)
-            return httpx.Response(200, json={"sbws": list(polygons)})
+            return httpx.Response(200, json={"sbws": in_window(request, polygons)})
         if request.url.host == "api.weather.gov":
             if nws_features is None:
                 return httpx.Response(503, text="<HTML>Error</HTML>")
             return httpx.Response(200, json={"features": list(nws_features)})
         if request.url.host == "mesonet.agron.iastate.edu" and mesonet_up:
             if request.url.path.endswith("vtec_events_bypoint.py"):
-                return httpx.Response(200, json={"events": list(spot)})
+                return httpx.Response(200, json={"events": in_window(request, spot)})
             return httpx.Response(200, json={"data": list(rows)})
         return httpx.Response(503)
     return httpx.MockTransport(handler)
@@ -271,3 +279,25 @@ def test_one_odd_event_doesnt_cost_the_others():
     spot = [{**ev("Wind Advisory", "WI", "Y", 9), "eventid": "x"}, ev("Winter Storm Warning", "WS", "W", 5)]
     http.set_transport_for_tests(serve(None, spot=spot, rows=[ELSEWHERE, row("WI", "Y", "x"), row("WS", "W", 5)]))
     assert [a["event"] for a in nws.normalize_alerts(nws.alerts_at(41.6, -93.61).data)] == ["Winter Storm Warning"]
+
+
+# ---------------------------------------------------------------- the audit of 0.9.2
+def test_an_alert_starting_after_the_next_utc_midnight_is_in_the_copy():
+    """Ojai, 2026-11-18: a Flood Watch and a Wind Advisory starting at 09Z and 11Z the next day were missing from the
+    copy (its window ended at the next UTC midnight) — a false "has ended" push, then a second "new" one."""
+    clock.freeze_for_tests(clock.now_utc().replace(hour=19, minute=30))      # 19:30Z: midnight is 4.5 hours away
+    spot = [ev("Flood Watch", "FA", "A", 4, wfo="LOX", issued_ago=-13.5, ends_in=27.5),
+            ev("Wind Advisory", "WI", "Y", 73, wfo="LOX", issued_ago=-15.5, ends_in=20.5)]
+    rows = [ELSEWHERE, row("FA", "A", 4, wfo="LOX", issued_ago=-13.5), row("WI", "Y", 73, wfo="LOX", issued_ago=-15.5)]
+    http.set_transport_for_tests(serve(None, spot=spot, rows=rows))
+    alerts = nws.normalize_alerts(nws.alerts_at(34.448, -119.243).data)
+    assert sorted(a["event"] for a in alerts) == ["Flood Watch", "Wind Advisory"]
+
+
+def test_the_window_reaches_past_the_latest_start_in_the_live_list():
+    log: list[str] = []
+    http.set_transport_for_tests(serve(None, rows=[ELSEWHERE, row("HU", "A", 9, issued_ago=-14 * 24)], log=log))
+    nws.alerts_at(41.6, -93.61)
+    asked = next(line for line in log if "bypoint" in line)
+    edate = asked.split("edate=")[1].split("&")[0]
+    assert edate > (clock.now_utc() + timedelta(days=14)).date().isoformat()
