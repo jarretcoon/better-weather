@@ -49,12 +49,31 @@ def _chance(pct: Any) -> str:
     return f" · 💧{value}%" if value >= 20 else ""
 
 
+def _day_and_clock(text: str) -> tuple[str, str]:
+    """'tomorrow 3 AM' -> ('tomorrow', '3 AM'); '15:00' -> ('', '15:00')."""
+    parts = text.split()
+    n = 2 if parts and parts[-1] in ("AM", "PM") else 1
+    return " ".join(parts[:-n]), " ".join(parts[-n:])
+
+
+def _when(a: dict[str, Any]) -> str:
+    """' until 8 AM', or for an alert that hasn't started yet ' from tomorrow 3 AM to 8 AM'."""
+    end = a.get("until") or a.get("ends")
+    start = a.get("starts") if a.get("upcoming") else None
+    if not start:
+        return f" until {end}" if end else ""
+    if not end:
+        return f" from {start}"
+    start_day = _day_and_clock(str(start))[0]
+    end_day, end_clock = _day_and_clock(str(end))
+    return f" from {start} to {end_clock if start_day and start_day == end_day else end}"
+
+
 def _alert_lines(alerts: list[dict[str, Any]]) -> list[str]:
     lines = []
     for a in alerts[:4]:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
-        until = a.get("until") or a.get("ends")
-        lines.append(f"{mark} **{a.get('event')}**" + (f" until {until}" if until else ""))
+        lines.append(f"{mark} **{a.get('event')}**{_when(a)}")
     if len(alerts) > 4:
         lines.append(f"…and {len(alerts) - 4} more")
     return lines
@@ -227,7 +246,7 @@ def alerts_card(r: dict[str, Any]) -> str:
     lines = [f"**Alerts · {where}**"]
     for a in alerts[:5]:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
-        lines.append(f"{mark} **{a['event']}**" + (f" until {a['ends']}" if a.get("ends") else ""))
+        lines.append(f"{mark} **{a['event']}**{_when(a)}")
         if a.get("headline") and str(a["headline"]).strip().lower() != str(a.get("event")).strip().lower():
             lines.append(f"   {a['headline']}")
         if a.get("life_threatening") and a.get("instruction"):

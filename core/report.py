@@ -69,12 +69,17 @@ class _Fmt:
         self.tz = tz
         self.now = now_utc().astimezone(tz)
 
-    def at(self, value: Any) -> str | None:
+    def moment(self, value: Any) -> datetime | None:
+        """A time from a source (ISO text or datetime), in the place's zone when it came without one."""
         dt = value if isinstance(value, datetime) else units.parse_time(value)
+        if dt is not None and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=self.tz)
+        return dt
+
+    def at(self, value: Any) -> str | None:
+        dt = self.moment(value)
         if dt is None:
             return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=self.tz)
         return units.day_clock(dt.astimezone(self.tz), self.clock, self.now)
 
     def precip(self, mm: Any) -> str | None:
@@ -283,14 +288,31 @@ def _om_days(om: http.Fetched | None, fmt: _Fmt, days: int, after: date | None =
     return out
 
 
+def _mark_upcoming(item: dict[str, Any], fmt: _Fmt) -> None:
+    """Flag an alert that hasn't started yet, while its "starts" is still a raw time: the cards then say
+    "from tomorrow 3 AM to 8 AM" rather than "until tomorrow 8 AM", which reads as if it were on now."""
+    start = fmt.moment(item.get("starts"))
+    if start is not None and start > fmt.now:
+        item["upcoming"] = True
+
+
 def _compact_alerts(alerts: list[dict[str, Any]], fmt: _Fmt) -> list[dict[str, Any]]:
-    return [{
-        "event": a["event"],
-        "severity": a.get("severity"),
-        "until": fmt.at(a.get("ends")),
-        "headline": a.get("headline"),
-        "life_threatening": a.get("life_threatening") or None,
-    } for a in alerts]
+    """The now card's alerts (raw NWS times in, the place's own clock out)."""
+    out = []
+    for a in alerts:
+        item = {**a}
+        _mark_upcoming(item, fmt)
+        out.append(_brief_alert(item | {"starts": fmt.at(a.get("starts")), "until": fmt.at(a.get("ends"))}))
+    return out
+
+
+def _brief_alert(a: dict[str, Any]) -> dict[str, Any]:
+    """One alert as the now card lists it, its times already on the place's clock. "starts" only when it's ahead."""
+    entry: dict[str, Any] = {"event": a.get("event"), "severity": a.get("severity")}
+    if a.get("upcoming"):
+        entry |= {"upcoming": True, "starts": a.get("starts")}
+    return entry | {"until": a.get("until"), "headline": a.get("headline"),
+                    "life_threatening": a.get("life_threatening") or None}
 
 
 def _clean(d: dict[str, Any]) -> dict[str, Any]:
@@ -397,10 +419,10 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         sources.append("Open-Meteo")
         _stale_note("Open-Meteo", om, notes)
 
-    alerts: list[dict[str, Any]] = []
+    alerts: list[dict[str, Any]] = []  # as the card lists them: times on the place's clock
     alerts_checked = False
     if al is not None:
-        alerts = nws.normalize_alerts(al.data)
+        alerts = _compact_alerts(nws.normalize_alerts(al.data), fmt)
         alerts_checked = True
         sources.append(iem.SOURCE if iem.is_copy(al.data) else "NWS alerts")
         _stale_note("NWS alerts", al, notes)
@@ -413,9 +435,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         if intl is None:
             notes.append("⚠️ Official alerts could not be checked — don't assume there are none")
         else:
-            alerts = [{"event": a.get("event"), "severity": a.get("severity"), "ends": None,
-                       "headline": a.get("headline"), "life_threatening": a.get("life_threatening")}
-                      for a in intl.get("alerts") or []]
+            alerts = [_brief_alert(a | {"until": a.get("ends")}) for a in intl.get("alerts") or []]
             alerts_checked = bool(intl.get("_exact"))
             if intl.get("source"):
                 sources.append(str(intl["source"]))
@@ -436,7 +456,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         "as_of": units.clock(fmt.now, fmt.clock),
         "current": _clean(current),
         "forecast": periods,
-        "alerts": _compact_alerts(alerts, fmt),
+        "alerts": alerts,
         "units": units_,
         "_next_hours": next_hours,
         "_reading_from": reading_from,
@@ -634,6 +654,7 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
     if country == "CA":
         items = intl_alerts.canada(place.lat, place.lon)
         for a in items:
+            _mark_upcoming(a, fmt)
             for key in ("starts", "ends", "next_update_by"):
                 a[key] = fmt.at(a.get(key))
         out = {"where": place.name, "place": place.public(), "count": len(items), "alerts": [_clean(a) for a in items],
@@ -647,6 +668,7 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
         eu = intl_alerts.europe(country, place.lat, place.lon, (town, place.district, place.region))
         for group in ("exact_matches", "region_name_matches", "orange_and_red_in_country"):
             for a in eu[group]:
+                _mark_upcoming(a, fmt)
                 a["starts"], a["ends"] = fmt.at(a.get("starts")), fmt.at(a.get("ends"))
         found = eu["exact_matches"] + eu["region_name_matches"]
         big = eu["orange_and_red_in_country"]

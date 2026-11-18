@@ -158,3 +158,70 @@ def test_a_recent_saved_copy_stays_off_the_card(home):
     r = call("weather")
     assert "Open-Meteo could not be refreshed; showing a copy from 20 min ago" in r["notes"]
     assert "could not be refreshed" not in r["card"]
+
+
+# --- 3: an alert that hasn't started yet says when it starts ------------------------------------------------
+
+DSM_ALERTS = "api.weather.gov/alerts/active?point=41.601%2C-93.609&status=actual"
+
+
+def _nws_alert(event, onset, ends, ident="a1", area="Polk"):
+    return {"type": "Feature", "properties": {
+        "id": ident, "event": event, "severity": "Moderate", "status": "Actual", "messageType": "Alert",
+        "onset": onset, "effective": "2026-11-15T02:00:00-06:00", "ends": ends, "expires": ends,
+        "headline": f"{event} issued", "areaDesc": area}}
+
+
+def test_an_alert_starting_later_reads_from_and_to(home):
+    # recorded at 2:38 AM: one advisory runs 3-8 AM tomorrow, the other is on now
+    serve({DSM_ALERTS: {"features": [
+        _nws_alert("Wind Advisory", "2026-11-16T03:00:00-06:00", "2026-11-16T08:00:00-06:00"),
+        _nws_alert("Dense Fog Advisory", "2026-11-15T01:00:00-06:00", "2026-11-15T09:00:00-06:00", "a2")]}})
+    r = call("weather")
+    assert "⚠️ **Wind Advisory** from tomorrow 3 AM to 8 AM" in r["card"]
+    assert "⚠️ **Dense Fog Advisory** until 9 AM" in r["card"]
+    wind = next(a for a in r["alerts"] if a["event"] == "Wind Advisory")
+    assert wind["upcoming"] is True and wind["starts"] == "tomorrow 3 AM" and wind["until"] == "tomorrow 8 AM"
+    fog = next(a for a in r["alerts"] if a["event"] == "Dense Fog Advisory")
+    assert "upcoming" not in fog and "starts" not in fog
+
+
+def test_when_wording():
+    from better_weather.core import display
+
+    assert display._when({"until": "9 AM"}) == " until 9 AM"
+    assert display._when({"upcoming": True, "starts": "3 PM", "ends": "Fri 4 AM"}) == " from 3 PM to Fri 4 AM"
+    assert display._when({"upcoming": True, "starts": "Fri 03:00", "ends": "Fri 08:00"}) == " from Fri 03:00 to 08:00"
+    assert display._when({"upcoming": True, "starts": "tomorrow 3 AM"}) == " from tomorrow 3 AM"
+    assert display._when({"starts": "1 AM", "ends": "9 AM"}) == " until 9 AM"  # on now: no "from"
+    card = display.alerts_card({"where": "Ojai, CA", "alerts": [
+        {"event": "Wind Advisory", "upcoming": True, "starts": "tomorrow 3 AM", "ends": "tomorrow 8 AM"}]})
+    assert "⚠️ **Wind Advisory** from tomorrow 3 AM to 8 AM" in card
+
+
+def _ma_warning(event, level, regions, onset="2026-11-15T12:00:00Z", expires="2026-11-16T00:00:00Z"):
+    return {"alert": {"msgType": "Alert", "info": [
+        {"language": "en-GB", "event": event, "headline": event, "severity": "Severe", "expires": expires,
+         "onset": onset, "senderName": "Met Service", "description": "Gusts to 100 km/h.",
+         "parameter": [{"valueName": "awareness_level", "value": f"{level}; colour; x"}],
+         "area": [{"areaDesc": r} for r in regions]}]}}
+
+
+def _meteoalarm(warnings):
+    http.set_transport_for_tests(httpx.MockTransport(lambda r: httpx.Response(200, json={"warnings": warnings})))
+
+
+def test_european_warnings_keep_their_end_and_say_when_they_start(home):
+    from better_weather.core import places, report
+
+    _meteoalarm([_ma_warning("Gale-force gusts", 3, ["Berlin"], onset="2026-11-15T07:00:00Z"),
+                 _ma_warning("Heavy rain", 2, ["Berlin"], onset="2026-11-15T15:00:00Z")])
+    berlin = places.Place("Berlin, DE", 52.52, 13.41, country="DE", timezone="Europe/Berlin")
+    r = report.alerts(berlin, None, "12h")  # 9:38 AM in Berlin
+    assert "⚠️ **Gale-force gusts** until tomorrow 1 AM" in r["card"]  # on since 8 AM
+    assert "⚠️ **Heavy rain** from 4 PM to tomorrow 1 AM" in r["card"]
+    now = report.now(berlin, "us", "12h")  # the now card kept no end before
+    assert "⚠️ **Gale-force gusts** until tomorrow 1 AM" in now["card"]
+    assert "⚠️ **Heavy rain** from 4 PM to tomorrow 1 AM" in now["card"]
+    card = report._intl_alerts(berlin, "12h")
+    assert [a.get("upcoming") for a in card["alerts"]] == [None, True]
