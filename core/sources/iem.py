@@ -28,9 +28,10 @@ _LOOKBACK_DAYS = 45              # if the live list can't say how far back its o
 _AHEAD_DAYS = 10                 # at least this far ahead: events that start later than the live list says
 _STALE_AFTER = timedelta(hours=2)  # newest update anywhere in the country older than this: the copy has stalled
 # Storm-based warnings drawn as polygons: the mesonet's by-point list matches them by county, so they need a hit in
-# its polygon lookup too — the NWS matches them by polygon. (Flood warnings stay matched by county: over-warning is
-# the safe side, and they don't flap.)
-_POLYGON = {("TO", "W"), ("SV", "W"), ("FF", "W"), ("EW", "W"), ("SQ", "W"), ("MA", "W"), ("DS", "W")}
+# its polygon lookup too — the NWS matches them by polygon. Flood advisories are polygons as well, and a wet day
+# brings a dozen per county (Homestead FL, 2026-11-18: 4 by county, 1 from the NWS). (Flood warnings stay matched
+# by county: over-warning is the safe side, and they don't flap.)
+_POLYGON = {("TO", "W"), ("SV", "W"), ("FF", "W"), ("EW", "W"), ("SQ", "W"), ("MA", "W"), ("DS", "W"), ("FA", "Y")}
 # The VTEC office of offices outside the lower 48, when the event's own link doesn't give it (the mesonet's links do;
 # its 3-letter ids don't always match: San Juan is JSJ there).
 _OFFICE = {"AFC": "PAFC", "AFG": "PAFG", "AJK": "PAJK", "HFO": "PHFO", "GUM": "PGUM", "SJU": "TJSJ", "JSJ": "TJSJ",

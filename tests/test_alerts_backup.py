@@ -301,3 +301,17 @@ def test_the_window_reaches_past_the_latest_start_in_the_live_list():
     asked = next(line for line in log if "bypoint" in line)
     edate = asked.split("edate=")[1].split("&")[0]
     assert edate > (clock.now_utc() + timedelta(days=14)).date().isoformat()
+
+
+def test_a_flood_advisory_needs_its_polygon_too():
+    """Homestead FL, 2026-11-18: the copy matched 4 flood advisories by county; the NWS (by polygon) listed 1."""
+    spot = [ev("Flood Advisory", "FA", "Y", n, wfo="MFL") for n in (206, 207, 208, 209)] + \
+        [ev("Flood Watch", "FA", "A", 3, wfo="MFL")]
+    rows = [ELSEWHERE, *(row("FA", "Y", n, wfo="MFL") for n in (206, 207, 208, 209)), row("FA", "A", 3, wfo="MFL")]
+    hit = {"wfo": "MFL", "phenomena": "FA", "significance": "Y", "eventid": 207, "issue": iso(-1),
+           "url": f"/vtec/?year={clock.now_utc().year}&wfo=KMFL&phenomena=FA&significance=Y&eventid=0207"}
+    http.set_transport_for_tests(serve(None, spot=spot, rows=rows, polygons=[hit]))
+    found = nws.normalize_alerts(nws.alerts_at(25.468, -80.477).data)
+    assert sorted((a["event"], a["id"]) for a in found) == [
+        ("Flood Advisory", f"iem:KMFL.FA.Y.0207.{clock.now_utc().year}"),
+        ("Flood Watch", f"iem:KMFL.FA.A.0003.{clock.now_utc().year}")]
