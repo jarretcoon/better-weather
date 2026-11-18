@@ -7,7 +7,10 @@ town, county or region itself. A spot is only "clear" when every active warning 
 
 from __future__ import annotations
 
+import logging
 import re
+import threading
+import time
 import unicodedata
 from collections.abc import Iterable
 from typing import Any
@@ -18,6 +21,15 @@ from ..clock import now_utc
 ECCC = "https://api.weather.gc.ca/collections/weather-alerts/items"
 METEOALARM = "https://feeds.meteoalarm.org/api/v1/warnings/feeds-{slug}"
 TEXT_LIMIT = 2500
+# A country's MeteoAlarm feed is downloaded again after FEED_FRESH. Some are big (Germany's is ~8 MB: 6-20 s), so
+# until FEED_KEEP the last copy keeps answering while the new one downloads in the background: only the very first
+# visitor (a fresh process) waits for it.
+FEED_FRESH = 10 * 60
+FEED_KEEP = 30 * 60
+_feeds: dict[str, tuple[float, dict[str, Any]]] = {}
+_refreshing: set[str] = set()
+_feeds_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 EU_SLUGS = {
     "AT": "austria", "BE": "belgium", "BA": "bosnia-herzegovina", "BG": "bulgaria", "HR": "croatia",
@@ -120,13 +132,46 @@ def _names_in(area: str, names: list[str]) -> bool:
     return bool(key) and key in names
 
 
+def _download(url: str) -> dict[str, Any]:
+    return http.get_json(url, ttl=FEED_FRESH, max_stale=FEED_KEEP).data or {}
+
+
+def _refresh(url: str) -> None:
+    try:
+        data = _download(url)
+        with _feeds_lock:
+            _feeds[url] = (time.monotonic(), data)
+    except Exception as exc:  # the older copy keeps answering until FEED_KEEP; after that a visitor waits again
+        logger.warning("MeteoAlarm refresh of %s failed: %s", url, exc)
+    finally:
+        with _feeds_lock:
+            _refreshing.discard(url)
+
+
+def _feed(url: str) -> dict[str, Any]:
+    now = time.monotonic()
+    with _feeds_lock:
+        kept = _feeds.get(url)
+        if kept and now - kept[0] < FEED_FRESH:
+            return kept[1]
+        if kept and now - kept[0] < FEED_KEEP:
+            if url not in _refreshing:
+                _refreshing.add(url)
+                threading.Thread(target=_refresh, args=(url,), name="meteoalarm-refresh", daemon=True).start()
+            return kept[1]
+    data = _download(url)
+    with _feeds_lock:
+        _feeds[url] = (time.monotonic(), data)
+    return data
+
+
 def europe(country: str, lat: float, lon: float, names: Iterable[str | None] = ()) -> dict[str, Any]:
     """*names* (town, county/department, region) match warnings that list areas by name only."""
     slug = EU_SLUGS[country]
     wanted = [n for n in (_area_key(x) for x in names) if len(n) >= 3]
     named: list[dict[str, Any]] = []
     unmapped = 0  # active warnings with no map area: a spot can't be called clear while any exist
-    data = http.get_json(METEOALARM.format(slug=slug), ttl=10 * 60, max_stale=30 * 60).data or {}
+    data = _feed(METEOALARM.format(slug=slug))
     exact: list[dict[str, Any]] = []
     big: list[dict[str, Any]] = []
     counts: dict[str, int] = {}

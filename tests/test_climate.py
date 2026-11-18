@@ -103,3 +103,16 @@ def test_history_limits():
         climate.history(_place(), "2099-01-01", None, "us")
     with pytest.raises(ValueError, match="31 days"):
         climate.history(_place(), "2026-01-01", "2026-03-01", "us")
+
+
+def test_peak_gives_its_time_unformatted_too():
+    from datetime import datetime, timedelta, timezone
+
+    from better_weather.core import climate
+
+    tz = timezone(timedelta(hours=-6))
+    now = datetime(2026, 11, 17, 12, 0, tzinfo=tz)
+    hourly = {"time": ["2026-11-17T13:00", "2026-11-17T19:00", "2026-11-18T09:00"], "us_aqi": [20, 69, 40]}
+    peak = climate._peak(hourly, "us_aqi", now, tz, "12h")
+    assert peak["value"] == 69 and peak["time"] == "2026-11-17T19:00:00-06:00"
+    assert "7" in peak["at"], "the formatted time is still there for the plugin's own words"
