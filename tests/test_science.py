@@ -65,3 +65,38 @@ def test_weisman_klemp_reads_as_a_supercell_day():
     s = {k: np.array(v, dtype=float) for k, v in SOUNDINGS["weisman_klemp"].items()}
     r = science.compute(s)
     assert r["ml"].cape > 1500 and r["shear6"] * science.MS_TO_KT > 40 and r["scp"] > 1
+
+
+def _models(gfs, hrrr):
+    """Open-Meteo by model: a dict answers, None is its 400 outside the HRRR grid."""
+    def handler(request):
+        if request.url.params.get("models") == "ncep_hrrr_conus":
+            if hrrr is None:
+                return httpx.Response(400, json={"error": True, "reason": "No data is available for this location"})
+            return httpx.Response(200, json=hrrr)
+        return httpx.Response(200, json=gfs)
+    return httpx.MockTransport(handler)
+
+
+def test_hrrr_outside_its_area_falls_back_to_gfs():
+    data = json.loads((Path(__file__).parent / "fixtures" / "science" / "gfs_houston.json").read_text(encoding="utf-8"))
+    clock.freeze_for_tests(datetime(2026, 11, 15, 20, 0, tzinfo=UTC))
+    place = places.Place("London, England, GB", 51.5, -0.13, country="GB", timezone="Europe/London")
+    http.set_transport_for_tests(_models(data, None))
+    r = science.sounding(place, "us", "12h", model="hrrr")
+    assert r["model"] == "GFS" and r["notes"] == [science.HRRR_AREA]
+    assert "continental US" in science.HRRR_AREA
+
+
+def test_hrrr_where_it_has_data_and_beyond_its_last_hour():
+    data = json.loads((Path(__file__).parent / "fixtures" / "science" / "gfs_houston.json").read_text(encoding="utf-8"))
+    clock.freeze_for_tests(datetime(2026, 11, 15, 20, 0, tzinfo=UTC))  # 2 PM CST: hour 14 of the run
+    place = places.Place("Houston, TX", 29.76, -95.37, country="US", timezone="America/Chicago")
+    hrrr = json.loads(json.dumps(data))
+    pressure = hrrr["hourly"]["surface_pressure"]
+    hrrr["hourly"]["surface_pressure"] = [v if i < 18 else None for i, v in enumerate(pressure)]  # ends at 6 PM
+    http.set_transport_for_tests(_models(data, hrrr))
+    r = science.sounding(place, "us", "12h", model="hrrr", hours_ahead=2)
+    assert r["model"] == "HRRR (US only)" and r["valid"] == "4 PM" and "notes" not in r
+    r = science.sounding(place, "us", "12h", model="hrrr", hours_ahead=6)
+    assert r["model"] == "GFS" and r["notes"] == [science.HRRR_RANGE] and r["valid"] == "8 PM"

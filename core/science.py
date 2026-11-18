@@ -17,6 +17,9 @@ URL = "https://api.open-meteo.com/v1/forecast"
 LEVELS = (1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100)
 MODELS = {"gfs": ("gfs_seamless", "GFS"), "hrrr": ("ncep_hrrr_conus", "HRRR (US only)")}
 MS_TO_KT = 1.943844
+HRRR_AREA = ("The HRRR model only covers the continental US and nearby parts of Canada and Mexico, so this is "
+             "the GFS model instead.")
+HRRR_RANGE = "The HRRR model doesn't reach that hour yet, so this is the GFS model instead."
 
 
 def _fetch(place: Place, model: str) -> dict[str, Any]:
@@ -103,31 +106,53 @@ def compute(prof: dict[str, np.ndarray]) -> dict[str, Any]:
     }
 
 
+def _surface(data: dict[str, Any], i: int) -> float | None:
+    seq = (data.get("hourly") or {}).get("surface_pressure") or []
+    return units.num(seq[i]) if 0 <= i < len(seq) else None
+
+
+def _pick(data: dict[str, Any], hours_ahead: int | None, at_peak: bool) -> tuple[int, dict[str, np.ndarray] | None]:
+    """The hour to read (now, N hours ahead or the 24 h CAPE peak) and its sounding: None when the model has
+    nothing complete then, and the hour -1 when it has no hours ahead at all."""
+    hourly = data.get("hourly") or {}
+    tz = units.zone(data.get("timezone"), data.get("utc_offset_seconds"))
+    hour = now_utc().astimezone(tz).replace(minute=0, second=0, microsecond=0)
+    stamps = [units.parse_time(s) for s in hourly.get("time") or []]
+    future = [i for i, s in enumerate(stamps) if s is not None and s.replace(tzinfo=tz) >= hour]
+    if not future:
+        return -1, None
+    idx = future[0]
+    if at_peak:
+        capes = hourly.get("cape") or []
+        idx = max(future[:24], key=lambda i: units.num(capes[i] if i < len(capes) else 0) or 0)
+    elif hours_ahead:
+        idx = future[min(max(0, int(hours_ahead)), len(future) - 1)]
+    return idx, build_profile(data, idx)
+
+
 def sounding(place: Place, units_: str, clock: str, *, model: str = "gfs", hours_ahead: int | None = None,
              at_peak: bool = False) -> dict[str, Any]:
     model = model if model in MODELS else "gfs"
-    data = _fetch(place, model)
+    notes: list[str] = []
+    try:
+        data = _fetch(place, model)
+    except http.FetchError as exc:
+        if model != "hrrr" or exc.status != 400:  # outside its grid Open-Meteo answers 400 "No data is available"
+            raise
+        data = {}
+    idx, prof = _pick(data, hours_ahead, at_peak)
+    if prof is None and model == "hrrr":  # HRRR has nothing here, or not that far ahead: GFS covers both
+        hours = range(len((data.get("hourly") or {}).get("time") or []))
+        beyond = _surface(data, idx) is None and any(_surface(data, i) is not None for i in hours)
+        notes.append(HRRR_RANGE if beyond else HRRR_AREA)
+        model, data = "gfs", _fetch(place, "gfs")
+        idx, prof = _pick(data, hours_ahead, at_peak)
+    if prof is None:
+        raise http.FetchError(URL, f"no complete {MODELS[model][1]} sounding for that hour")
     hourly = data.get("hourly") or {}
-    times = hourly.get("time") or []
-    if not times:
-        raise http.FetchError(URL, f"no {MODELS[model][1]} data here")
     tz = units.zone(data.get("timezone"), data.get("utc_offset_seconds"))
     now = now_utc().astimezone(tz)
-    stamps = [units.parse_time(s) for s in times]
-    future = [i for i, s in enumerate(stamps) if s is not None and s.replace(tzinfo=tz) >= now.replace(
-        minute=0, second=0, microsecond=0)]
-    if not future:
-        raise http.FetchError(URL, "the model run has no future hours")
-    idx = future[0]
-    if at_peak:
-        window = future[:24]
-        capes = hourly.get("cape") or []
-        idx = max(window, key=lambda i: units.num(capes[i] if i < len(capes) else 0) or 0)
-    elif hours_ahead:
-        idx = future[min(max(0, int(hours_ahead)), len(future) - 1)]
-    prof = build_profile(data, idx)
-    if prof is None:
-        raise http.FetchError(URL, "incomplete sounding for that hour")
+    stamps = [units.parse_time(s) for s in hourly.get("time") or []]
     r = compute(prof)
     us = units_ != "metric"
 
@@ -181,5 +206,6 @@ def sounding(place: Place, units_: str, clock: str, *, model: str = "gfs", hours
         "source": f"{MODELS[model][1]} model sounding via Open-Meteo; calculations checked against MetPy",
         "how_to_read": ("Model guidance, not observations. Composites use fixed layers (0-1 km, 0-3 km, 0-6 km). "
                         "Give the 'reading' lines in plain words; quote numbers only if asked."),
+        "notes": notes or None,
     }
     return {k: v for k, v in out.items() if v is not None}
