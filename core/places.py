@@ -9,11 +9,11 @@ import os
 import re
 import tempfile
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from . import http, settings
+from . import http, settings, units
 from .sources import nws, openmeteo
 
 US_STATES = {
@@ -51,6 +51,26 @@ _IATA = re.compile(r"^[A-Za-z]{3}$")
 _TERRITORIES = {"PR", "GU", "VI", "AS", "MP"}
 # places renamed since the geocoder's name list was made, asked for by their old name with their state
 _RENAMED = {("barrow", "AK"): "Utqiagvik"}  # 2016
+# common US shorthands, typed on their own (dots dropped: "L.A.", "D.C.")
+_ALIASES = {"la": "Los Angeles, CA", "nyc": "New York, NY", "sf": "San Francisco, CA", "dc": "Washington, DC",
+            "philly": "Philadelphia, PA", "vegas": "Las Vegas, NV", "district of columbia": "Washington, DC"}
+# a well-known place in each state, for "Which place in Iowa? Try 'Des Moines, IA'"
+_STATE_EXAMPLES = {
+    "AL": "Birmingham", "AK": "Anchorage", "AZ": "Phoenix", "AR": "Little Rock", "CA": "Los Angeles",
+    "CO": "Denver", "CT": "Hartford", "DE": "Wilmington", "FL": "Miami", "GA": "Atlanta", "HI": "Honolulu",
+    "ID": "Boise", "IL": "Chicago", "IN": "Indianapolis", "IA": "Des Moines", "KS": "Wichita", "KY": "Louisville",
+    "LA": "New Orleans", "ME": "Portland", "MD": "Baltimore", "MA": "Boston", "MI": "Detroit",
+    "MN": "Minneapolis", "MS": "Jackson", "MO": "Kansas City", "MT": "Billings", "NE": "Omaha",
+    "NV": "Las Vegas", "NH": "Manchester", "NJ": "Newark", "NM": "Albuquerque", "NY": "Buffalo",
+    "NC": "Charlotte", "ND": "Fargo", "OH": "Columbus", "OK": "Oklahoma City", "OR": "Portland",
+    "PA": "Philadelphia", "RI": "Providence", "SC": "Charleston", "SD": "Sioux Falls", "TN": "Nashville",
+    "TX": "Houston", "UT": "Salt Lake City", "VT": "Burlington", "VA": "Richmond", "WA": "Seattle",
+    "WV": "Charleston", "WI": "Milwaukee", "WY": "Cheyenne", "DC": "Washington", "PR": "San Juan",
+    "GU": "Hagatna", "VI": "Charlotte Amalie", "AS": "Pago Pago", "MP": "Saipan",
+}
+# the geocoder knows each place under one spelling: "St. Petersburg" (Florida), "Saint Paul", "Fort Myers"
+_SPELLINGS = {"st": ("St.", "Saint"), "saint": ("St.",), "ft": ("Fort",), "mt": ("Mount", "Mt.")}
+_SHORT_WORDS = {"st": "saint", "ft": "fort", "mt": "mount"}
 PLACES_FILE = "places.json"  # in the plugin's data folder, so the Desktop backend sees the same places
 _places_lock = threading.RLock()
 logger = logging.getLogger(__name__)
@@ -124,6 +144,19 @@ def _in_state(result: dict[str, Any], code: str) -> bool:
     return (country == "US" and admin1 == US_STATES[code].lower()) or (code in _TERRITORIES and country == code)
 
 
+def _plain(name: Any) -> str:
+    """'St. Paul' and 'st paul' compare equal."""
+    return " ".join(str(name or "").lower().replace(".", " ").split())
+
+
+def _same_name(a: Any, b: Any) -> bool:
+    """'St Paul' and 'Saint Paul', 'Ft Myers' and 'Fort Myers', 'Mt Vernon' and 'Mt. Vernon' are one name."""
+    def canon(name: Any) -> list[str]:
+        words = _plain(name).split()
+        return [_SHORT_WORDS.get(words[0], words[0]), *words[1:]] if words else []
+    return canon(a) == canon(b)
+
+
 def _matches(result: dict[str, Any], qualifier: str) -> bool:
     q = qualifier.strip().lower().rstrip(".")
     if not q:
@@ -141,6 +174,48 @@ def _matches(result: dict[str, Any], qualifier: str) -> bool:
     return q in {admin1, country_name, country.lower()} or admin1.startswith(q) or country_name.startswith(q)
 
 
+def _geocode(name: str) -> list[dict[str, Any]]:
+    try:
+        return openmeteo.geocode(name)
+    except http.FetchError as exc:
+        raise PlaceError(f"Place search is unavailable right now ({exc}).",
+                         "Try again, or pass coordinates like '41.6,-93.6'.") from exc
+
+
+def _respellings(head: str) -> list[str]:
+    """'St Paul' -> 'St. Paul', 'Saint Paul'; 'Ft Myers' -> 'Fort Myers'; 'Saint Louis' -> 'St. Louis'."""
+    first, _, rest = head.strip().partition(" ")
+    rest = rest.strip()
+    alternatives = _SPELLINGS.get(first.lower().rstrip("."), ()) if rest else ()
+    return [f"{a} {rest}" for a in alternatives if f"{a} {rest}" != head.strip()]
+
+
+def _town(result: dict[str, Any]) -> bool:
+    """A city, town or country, not the airport, park or mountain named after it."""
+    return str(result.get("feature_code") or "PPL").startswith(("PPL", "PCL"))
+
+
+def _found(results: list[dict[str, Any]], head: str, qualifiers: list[str]) -> bool:
+    """Whether the search found what was asked: a town matching every qualifier, or else a place by that very name."""
+    if qualifiers:
+        return any(_town(r) and all(_matches(r, q) for q in qualifiers) for r in results)
+    return any(_plain(r.get("name")) == _plain(head) for r in results)
+
+
+def _abroad_note(head: str, picked: dict[str, Any], results: list[dict[str, Any]]) -> str | None:
+    """'Paris' with nothing after it is Paris, France: say so, and how to get the Paris in the US instead."""
+    if str(picked.get("country_code") or "").upper() in ("US", *_TERRITORIES):
+        return None
+    us = next((r for r in results if _plain(r.get("name")) == _plain(head)
+               and str(r.get("country_code") or "").upper() == "US"
+               and str(r.get("admin1") or "").lower() in _STATE_NAMES), None)
+    if us is None:
+        return None
+    name = str(us.get("name"))
+    return (f"Using {_label(picked)}. For {name} in the US, add the state, "
+            f"like '{name}, {_STATE_NAMES[str(us['admin1']).lower()]}'.")
+
+
 def _search(text: str) -> Place:
     parts = [p.strip() for p in text.split(",") if p.strip()]
     if not parts:
@@ -148,18 +223,25 @@ def _search(text: str) -> Place:
     head, qualifiers = parts[0], parts[1:]
     state = next((c for c in map(_state_code, qualifiers) if c), None)
     head = _RENAMED.get((head.lower(), state), head) if state else head
-    try:
-        results = openmeteo.geocode(head)
-        if not results and qualifiers:
-            results = openmeteo.geocode(text)
-    except http.FetchError as exc:
-        raise PlaceError(f"Place search is unavailable right now ({exc}).",
-                         "Try again, or pass coordinates like '41.6,-93.6'.") from exc
+    results = _geocode(head)
+    if not results and qualifiers:
+        results = _geocode(text)
+    others = _respellings(head) if not _found(results, head, qualifiers) else []
+    if others:
+        # "St Paul, MN" finds nothing in Minnesota; "Saint Paul, MN" does. Of the other spellings' answers, the
+        # biggest town by that name (in that state): Saint Paul, MN for a bare "St Paul", not the one in Alaska.
+        pool = [r for other in others for r in _geocode(other)]
+        named = [r for r in pool if _town(r) and _same_name(r.get("name"), head)
+                 and all(_matches(r, q) for q in qualifiers)]
+        if named:
+            return _from_result(max(named, key=lambda r: units.num(r.get("population")) or 0), "search")
+        results = results or pool
     if not results:
         raise PlaceError(f"Couldn't find a place called '{text}'.",
                          "Try 'City, ST', a ZIP code, an airport code like KDSM, or coordinates.")
     if qualifiers:
-        filtered = [r for r in results if all(_matches(r, q) for q in qualifiers)]
+        filtered = sorted((r for r in results if all(_matches(r, q) for q in qualifiers)),
+                          key=lambda r: not _town(r))  # the town before its airport
         if filtered:
             return _from_result(filtered[0], "search")
         if state:
@@ -171,7 +253,30 @@ def _search(text: str) -> Place:
             return _from_result(us[0], "search", note=f"No exact match for '{text}'; using the closest US result.")
         return _from_result(results[0], "search",
                             note=f"No exact match for '{text}'; using the closest result.")
-    return _from_result(results[0], "search")
+    return _from_result(results[0], "search", note=_abroad_note(head, results[0], results))
+
+
+def _state_example(code: str) -> str:
+    return f"{_STATE_EXAMPLES[code]}, {code}"
+
+
+def _bare_state(text: str, code: str) -> Place:
+    """'Iowa' on its own: a whole state isn't a place to forecast, so ask which place in it. A few state names
+    are also a big city or a country by that name ('New York', 'Washington' for DC, 'Georgia'): those resolve,
+    with a note when the place isn't in that state."""
+    results = _geocode(text) if len(text.strip()) > 2 else []
+    for r in results:
+        name, feature = _plain(r.get("name")), str(r.get("feature_code") or "")
+        big = feature.startswith("PCL") or (units.num(r.get("population")) or 0) >= 100_000  # country or big city
+        capital = feature == "PPLC" and name.startswith(_plain(text))  # "Washington" -> Washington D.C.
+        if (name == _plain(text) and big) or capital:
+            place = _from_result(r, "search")
+            if _in_state(r, code):
+                return place
+            return replace(place, note=f"Using {place.name}. For the US state of {US_STATES[code]}, name a place "
+                                       f"in it, like '{_state_example(code)}'.")
+    raise PlaceError(f"Which place in {US_STATES[code]}?",
+                     f"Name a city or town there, like '{_state_example(code)}', or give a ZIP code.")
 
 
 def _with_state_comma(text: str) -> str | None:
@@ -185,17 +290,24 @@ def _with_state_comma(text: str) -> str | None:
     return None
 
 
-def _us_airport(code: str) -> Place | None:
-    """'ORD', 'HNL': a US airport by its 3-letter code (its weather station is K + the code, or P + it in Alaska,
-    Hawaii and the Pacific)."""
-    airport = _airport("K" + code.upper())
-    if airport is not None:
-        return airport
-    airport = _airport("P" + code.upper())
-    # P codes count only out in Alaska, Hawaii and the Pacific: PRIO, say, is a weather station in Oregon
-    if airport is not None and (airport.lon <= -129 or airport.lon >= 130):
-        return airport
+def us_airport_station(code: str) -> tuple[str, dict[str, Any]] | None:
+    """'ORD' -> KORD, 'HNL' -> PHNL: a US airport's weather station by its 3-letter code (K + the code, or P + it
+    in Alaska, Hawaii and the Pacific), with the station's details. None when neither is a station."""
+    for icao in ("K" + code.upper(), "P" + code.upper()):
+        info = _station(icao)
+        if info is None:
+            continue
+        # P codes count only out in Alaska, Hawaii and the Pacific: PRIO, say, is a weather station in Oregon
+        if icao.startswith("P") and -129 < float(info["lon"]) < 130:
+            continue
+        return icao, info
     return None
+
+
+def _us_airport(code: str) -> Place | None:
+    """'ORD', 'HNL': a US airport by its 3-letter code."""
+    found = us_airport_station(code)
+    return _airport_place(*found) if found else None
 
 
 def _zip(text: str) -> Place:
@@ -212,16 +324,22 @@ def _zip(text: str) -> Place:
                  place.timezone, "zip", district=place.district)
 
 
-def _airport(code: str) -> Place | None:
+def _station(code: str) -> dict[str, Any] | None:
     try:
-        info = nws.station_info(code)
+        return nws.station_info(code) or None
     except http.FetchError:
-        info = None
-    if not info:
         return None
+
+
+def _airport_place(code: str, info: dict[str, Any]) -> Place:
     name = str(info.get("name") or code)
     return Place(f"{name} ({code})", float(info["lat"]), float(info["lon"]), None, None,
                  info.get("timezone"), "airport")
+
+
+def _airport(code: str) -> Place | None:
+    info = _station(code)
+    return _airport_place(code, info) if info else None
 
 
 def _coords(lat: float, lon: float) -> Place:
@@ -329,14 +447,22 @@ def resolve(text: str | None = None, lat: Any = None, lon: Any = None, *, _depth
         if _depth > 2 or home.lower() in _HOME_WORDS:
             raise PlaceError("The saved home location is invalid.", "Set it again with weather_places.")
         place = resolve(home, _depth=_depth + 1)
-        return Place(place.name, place.lat, place.lon, place.country, place.region, place.timezone,
-                     "home", place.note, place.district)
+        # no note: the user saw it when they set home, and it isn't news on every question after that
+        return replace(place, kind="home", note=None)
 
     saved = saved_places().get(raw.lower())
     if saved:
         return Place(str(saved.get("name") or raw), float(saved["lat"]), float(saved["lon"]),
                      saved.get("country"), saved.get("region"), saved.get("timezone"), "saved",
                      district=saved.get("district"))
+
+    alias = _ALIASES.get(" ".join(raw.lower().replace(".", "").split()))
+    if alias:  # "LA", "NYC": not La in Cambodia, not the Central Park weather station
+        return _search(alias)
+
+    state = _state_code(raw)
+    if state:  # "Iowa", "IA" on their own
+        return _bare_state(raw, state)
 
     match = _COORDS.match(raw)
     if match:
