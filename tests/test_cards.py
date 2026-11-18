@@ -340,3 +340,14 @@ def test_interactive_fetches_try_twice_with_shorter_timeouts():
     with pytest.raises(http.FetchError):  # outside (the cron pushes, background refreshes): the patient defaults
         http.get_json("https://example.test/slow2", ttl=60)
     assert len(seen) == http.ATTEMPTS == 3 and seen[0]["read"] == http.TIMEOUT.read
+
+
+# --- 8: the hourly card's rows span the hours its header names ---------------------------------------------
+
+def test_the_72_hour_card_reaches_the_third_day(home):
+    r = call("weather_forecast", hourly=True, hours=72)
+    lines = r["card"].splitlines()
+    assert lines[0] == "**Des Moines, IA** · next 72 hours" and len(lines) == 19  # every 4th hour
+    assert lines[-1].startswith(r["hours"][68]["time"] + " ")  # 68 h out, not 45
+    for hours, rows in ((12, 12), (24, 12), (48, 16), (54, 18)):
+        assert len(call("weather_forecast", hourly=True, hours=hours)["card"].splitlines()) == rows + 1

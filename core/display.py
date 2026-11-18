@@ -194,9 +194,10 @@ def forecast_card(r: dict[str, Any]) -> str:
     name = r["place"]["name"]
     if r.get("hours"):
         rows = r["hours"]
-        stride = 1 if len(rows) <= 12 else 2 if len(rows) <= 24 else 3
+        # every row from first to last, so the rows span the hours the header names (18 lines at most)
+        stride = 1 if len(rows) <= 12 else 2 if len(rows) <= 24 else 3 if len(rows) <= 54 else 4
         lines = [f"**{name}** · next {len(rows)} hours"]
-        for h in rows[::stride][:16]:
+        for h in rows[::stride]:
             day = h["_day"] if isinstance(h.get("_day"), bool) else _daytime(h.get("time"))
             lines.append(f"{h.get('time')} {icon(h.get('sky'), day)} {_deg(h.get('temp'))}"
                          f"{_chance(h.get('precip_chance_pct'))}")
