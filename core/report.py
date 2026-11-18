@@ -104,15 +104,17 @@ class _Fmt:
 
     def precip(self, mm: Any) -> str | None:
         v = units.num(mm)
-        if v is None or v < 0.05:  # nothing measurable: leave it out instead of "0.00 in"
+        shown = None if v is None else round(v / 25.4, 2) if self.units == "us" else round(v, 1)
+        if not shown or shown < 0:  # nothing measurable: leave it out instead of "0.00 in"
             return None
-        return f"{v / 25.4:.2f} in" if self.units == "us" else f"{v:.1f} mm"
+        return f"{shown:.2f} in" if self.units == "us" else f"{shown:.1f} mm"
 
     def snow(self, cm: Any) -> str | None:
         v = units.num(cm)
-        if v is None:
+        shown = None if v is None else round(v / 2.54 if self.units == "us" else v, 1)
+        if not shown or shown < 0:  # a trace: leave it out instead of "0.0 in"
             return None
-        return f"{v / 2.54:.1f} in" if self.units == "us" else f"{v:.1f} cm"
+        return f"{shown:.1f} in" if self.units == "us" else f"{shown:.1f} cm"
 
 
 def _place_tz(place: Place, point: dict[str, Any] | None, om: http.Fetched | None) -> tzinfo:

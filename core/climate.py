@@ -2,7 +2,8 @@
 
 US history comes from official station records (NOAA ACIS: observed values, 1991-2020 normals,
 calendar-day records). Days a station hasn't reported yet, and places outside the US, use the ERA5
-reanalysis via Open-Meteo, which is modelled; answers mark those values as estimates."""
+reanalysis via Open-Meteo, or for the last few days (ERA5 lags about five) Open-Meteo's forecast models;
+both are modelled, and answers mark those values as estimates and say which was used."""
 
 from __future__ import annotations
 
@@ -133,6 +134,9 @@ def _peak(hourly: dict[str, Any], key: str, now: Any, tz: Any, clock: str) -> di
 
 DAILY = "temperature_2m_max,temperature_2m_min,precipitation_sum,snowfall_sum"
 MAX_RANGE_DAYS = 31
+ERA5_SOURCE = "ERA5 reanalysis via Open-Meteo (modelled)"
+RECENT_SOURCE = "Open-Meteo forecast models for the last few days (modelled)"
+TODAY_NOTE = "Today's numbers include the forecast for the rest of the day"
 
 
 def parse_day(text: Any, today: date) -> date:
@@ -151,7 +155,8 @@ def parse_day(text: Any, today: date) -> date:
 
 
 def _model_days(lat: float, lon: float, start: date, end: date, today: date) -> dict[str, dict[str, Any]]:
-    """ERA5 rows by ISO date (°C, mm, cm). Recent days use the forecast API (the archive lags ~5 days)."""
+    """Modelled rows by ISO date (°C, mm, cm): ERA5 (the archive) up to 6 days ago; the last few days and today
+    from the forecast API, as the archive lags ~5 days. Each row's "_from" says which: "era5" or "forecast"."""
     out: dict[str, dict[str, Any]] = {}
     recent_cut = today - timedelta(days=6)
     if start <= recent_cut:
@@ -159,13 +164,13 @@ def _model_days(lat: float, lon: float, start: date, end: date, today: date) -> 
             "latitude": round(lat, 2), "longitude": round(lon, 2), "start_date": start.isoformat(),
             "end_date": min(end, recent_cut).isoformat(), "daily": DAILY, "timezone": "auto"},
             ttl=30 * 24 * 3600, max_stale=365 * 24 * 3600)
-        out.update(_daily_rows(fetched.data))
+        out.update({k: v | {"_from": "era5"} for k, v in _daily_rows(fetched.data).items()})
     if end > recent_cut:
         past = max(1, min(92, (today - max(start, recent_cut + timedelta(days=1))).days + 1))
         fetched = http.get_json(FORECAST_URL, {
             "latitude": round(lat, 2), "longitude": round(lon, 2), "past_days": past, "forecast_days": 1,
             "daily": DAILY, "timezone": "auto"}, ttl=60 * 60, max_stale=24 * 3600)
-        out.update({k: v for k, v in _daily_rows(fetched.data).items()
+        out.update({k: v | {"_from": "forecast"} for k, v in _daily_rows(fetched.data).items()
                     if start.isoformat() <= k <= end.isoformat()})
     return out
 
@@ -222,9 +227,12 @@ def history(place: Place, start_text: Any, end_text: Any, units_: str) -> dict[s
     if missing:
         try:
             model = _model_days(place.lat, place.lon, min(missing), max(missing), today)
-            sources.append("ERA5 reanalysis via Open-Meteo (modelled)")
         except http.FetchError as exc:
             notes.append(f"Model history unavailable ({exc})")
+        used = {(model.get(d.isoformat()) or {}).get("_from") for d in missing}
+        sources.extend(label for kind, label in (("era5", ERA5_SOURCE), ("forecast", RECENT_SOURCE)) if kind in used)
+        if today in missing and today.isoformat() in model:
+            notes.append(TODAY_NOTE)
 
     def temp(c: float | None) -> int | None:
         return units.temp_value(c, units_)
@@ -235,9 +243,10 @@ def history(place: Place, start_text: Any, end_text: Any, units_: str) -> dict[s
         return f"{mm:.1f} mm" if metric else f"{mm / 25.4:.2f} in"
 
     def snow(cm: float | None) -> str | None:
-        if not cm:
+        shown = None if cm is None else round(cm if metric else cm / 2.54, 1)
+        if not shown or shown < 0:  # none, or a trace: not "0.0 in"
             return None
-        return f"{cm:.1f} cm" if metric else f"{cm / 2.54:.1f} in"
+        return f"{shown:.1f} cm" if metric else f"{shown:.1f} in"
 
     days_out: list[dict[str, Any]] = []
     for d in all_days:

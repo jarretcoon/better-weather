@@ -367,3 +367,25 @@ def test_statewide_alerts_say_where(home):
     assert card[6] == "   📍 Mono"
     here = call("weather_alerts")["card"]
     assert "Winter Storm Warning" in here and "📍" not in here  # one place: no area line
+
+
+# --- 10: smaller ones -------------------------------------------------------------------------------------------
+
+def test_a_trace_of_snow_or_rain_is_left_out_not_shown_as_zero():
+    from zoneinfo import ZoneInfo
+
+    from better_weather.core import report
+
+    us, metric = report._Fmt("us", "12h", ZoneInfo("UTC")), report._Fmt("metric", "12h", ZoneInfo("UTC"))
+    assert us.snow(0.1) is None and us.snow(0.0) is None and us.snow(0.3) == "0.1 in"
+    assert metric.snow(0.04) is None and metric.snow(0.3) == "0.3 cm"
+    assert us.precip(0.1) is None and us.precip(0.3) == "0.01 in"
+    assert metric.precip(0.04) is None and metric.precip(0.3) == "0.3 mm"
+
+
+def test_a_forecast_that_starts_tonight_ends_without_a_dangling_low(home):
+    _at("2026-11-16T00:30:00+00:00")  # 6:30 PM: "Sunday Night" leads, the list ends on a day
+    lines = call("weather_forecast")["card"].splitlines()
+    assert lines[1].startswith("**Sunday Night** ") and " low " in lines[1]
+    assert not any("/ –" in line for line in lines)
+    assert " high · " in lines[-1]

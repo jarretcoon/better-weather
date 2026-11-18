@@ -184,8 +184,9 @@ def _daily_from_periods(periods: list[dict[str, Any]]) -> list[str]:
         name = str(p.get("name") or "")
         short = name if name in {"Today", "This Afternoon"} else (p.get("_dow") or name[:3])
         pop = max((q.get("precip_chance_pct") or 0) for q in (p, night) if q)
-        low = _deg(night.get("temp") if night else None)
-        lines.append(f"**{short}** {icon(p.get('sky'))} {_deg(p.get('temp'))} / {low} · {p.get('sky')}{_chance(pop)}")
+        # a day without its night (the last one, when the list began with "Tonight"): its high alone, no "/ –"
+        temps = f"{_deg(p.get('temp'))} / {_deg(night.get('temp'))}" if night else f"{_deg(p.get('temp'))} high"
+        lines.append(f"**{short}** {icon(p.get('sky'))} {temps} · {p.get('sky')}{_chance(pop)}")
         i += 2 if night else 1
     return lines
 

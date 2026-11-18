@@ -129,3 +129,33 @@ def test_peak_gives_its_time_unformatted_too():
     peak = climate._peak(hourly, "us_aqi", now, tz, "12h")
     assert peak["value"] == 69 and peak["time"] == "2026-11-17T19:00:00-06:00"
     assert "7" in peak["at"], "the formatted time is still there for the plugin's own words"
+
+
+def _model_transport(calls):
+    def handler(request):
+        url = str(request.url)
+        calls.append(url)
+        params = parse_qs(urlparse(url).query)
+        if "archive-api" in url:
+            days = [params["start_date"][0], params["end_date"][0]]
+        else:  # the forecast API: the last few days and today
+            days = ["2026-11-13", "2026-11-14", "2026-11-15"]
+        return httpx.Response(200, json={"daily": {
+            "time": days, "temperature_2m_max": [10.0] * len(days), "temperature_2m_min": [1.0] * len(days),
+            "precipitation_sum": [0.0] * len(days), "snowfall_sum": [0.1] * len(days)}})
+
+    return httpx.MockTransport(handler)
+
+
+def test_history_says_which_model_each_day_came_from():
+    paris = places.Place("Paris, FR", 48.85, 2.35, country="FR", timezone="Europe/Paris")  # today: 2026-11-15
+    calls = []
+    http.set_transport_for_tests(_model_transport(calls))
+    old = climate.history(paris, "2026-11-01", None, "us")
+    assert old["sources"] == [climate.ERA5_SOURCE] and "snow" not in old["days"][0]  # 0.1 cm: a trace
+    recent = climate.history(paris, "2026-11-13", None, "us")
+    assert recent["sources"] == [climate.RECENT_SOURCE] and climate.TODAY_NOTE not in recent.get("notes", [])
+    today = climate.history(paris, "today", None, "us")
+    assert today["sources"] == [climate.RECENT_SOURCE] and climate.TODAY_NOTE in today["notes"]
+    both = climate.history(paris, "2026-11-08", "2026-11-14", "us")
+    assert both["sources"] == [climate.ERA5_SOURCE, climate.RECENT_SOURCE]
