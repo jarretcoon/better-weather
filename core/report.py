@@ -27,6 +27,10 @@ _pool_lock = threading.Lock()
 FETCH_WAIT_S = 45.0
 SEVERE_EVENTS = ("tornado", "severe thunderstorm", "flash flood", "extreme wind",
                  "special weather statement")
+# The now card names where its reading came from unless it's a station right next door with an hour-fresh report.
+NEXT_DOOR_KM = 5.0
+FRESH_OBS_MIN = 60
+ELEVATION_WAIT_S = 10.0  # how long the station search waits for the model's answer to learn the place's height
 
 
 def _executor() -> ThreadPoolExecutor:
@@ -107,6 +111,39 @@ def _nws_lookup(place: Place, notes: list[str]) -> tuple[dict[str, Any] | None, 
     except http.FetchError as exc:
         notes.append(f"NWS lookup failed ({exc}); using Open-Meteo instead")
         return None, False
+
+
+def _ago(minutes: float) -> str:
+    """'12 min ago' up to two hours, then '3 hr ago'."""
+    m = max(1, round(minutes))
+    return f"{m} min ago" if m < 120 else f"{round(m / 60)} hr ago"
+
+
+def _observation(point: dict[str, Any], place: Place, om: Future[Any]) -> dict[str, Any] | None:
+    """The now card's station report, from a station that stands for the place (nws.latest_observation). The model's
+    answer, fetched alongside, gives the place's height; without it in ELEVATION_WAIT_S, distance alone decides."""
+    try:
+        elevation = units.num((om.result(timeout=ELEVATION_WAIT_S).data or {}).get("elevation"))
+    except Exception:  # the model's own job reports its failure
+        elevation = None
+    return nws.latest_observation(point, lat=place.lat, lon=place.lon, elevation_m=elevation)
+
+
+def _reading_from(obs: dict[str, Any]) -> str | None:
+    """'KDSM 12 min ago' for the card when the station isn't right next door or its report is over an hour old."""
+    km, age = obs.get("distance_km"), obs.get("age_min")
+    far = km is not None and km > NEXT_DOOR_KM
+    old = age is not None and age > FRESH_OBS_MIN
+    if not (far or old):
+        return None
+    return f"{obs.get('station')} {_ago(age)}" if age is not None else str(obs.get("station"))
+
+
+def _distance(km: Any, units_: str) -> str | None:
+    v = units.num(km)
+    if v is None:
+        return None
+    return f"{max(1, round(v * 0.621371))} mi" if units_ == "us" else f"{max(1, round(v))} km"
 
 
 def _stale_note(label: str, fetched: http.Fetched | None, notes: list[str]) -> None:
@@ -273,7 +310,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
     intl_job = _Job("Official alerts", _intl_alerts, place, clock) if not point and nws_known else None
     obs_job = fc_job = al_job = None
     if point:
-        obs_job = _Job("NWS observation", nws.latest_observation, point)
+        obs_job = _Job("NWS observation", _observation, point, place, om_job.future)
         fc_job = _Job("NWS forecast", nws.forecast, point, metric=metric)
         al_job = _Job("NWS alerts", nws.alerts_at, place.lat, place.lon)
 
@@ -285,27 +322,36 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
 
     # Current conditions: a real station report if it's recent, else the model's estimate.
     current: dict[str, Any] = {}
+    reading_from: str | None = None  # the card's "· KDSM 12 min ago" / "· model estimate"
     om_current = ((om.data if om else None) or {}).get("current") or {}
     if obs and (obs.get("age_min") or 0) <= nws.MAX_OBS_AGE_MIN:
-        feels_c = obs.get("wind_chill_c") or obs.get("heat_index_c") or units.heat_or_chill_c(
-            obs.get("temp_c"), obs.get("rh"), obs.get("wind_kmh"))
+        feels_c = next((v for v in (obs.get("wind_chill_c"), obs.get("heat_index_c")) if v is not None), None)
+        if feels_c is None:
+            feels_c = units.heat_or_chill_c(obs.get("temp_c"), obs.get("rh"), obs.get("wind_kmh"))
+        wind = units.wind(obs.get("wind_dir"), obs.get("wind_kmh"), obs.get("gust_kmh"), units_)
+        if wind is None:  # some stations leave wind out of a report: the model's, rather than no wind at all
+            wind = units.wind(om_current.get("wind_direction_10m"), om_current.get("wind_speed_10m"),
+                              om_current.get("wind_gusts_10m"), units_)
         current = {
             "temp": units.temp(obs.get("temp_c"), units_),
             "feels_like": units.temp(feels_c, units_) if feels_c is not None else None,
             "sky": obs.get("text") or openmeteo.describe(om_current.get("weather_code")),
             "humidity_pct": round(obs["rh"]) if obs.get("rh") is not None else None,
             "dewpoint": units.temp(obs.get("dewpoint_c"), units_),
-            "wind": units.wind(obs.get("wind_dir"), obs.get("wind_kmh"), obs.get("gust_kmh"), units_),
+            "wind": wind,
             "pressure": units.pressure(obs.get("pressure_pa"), units_),
             "visibility": units.distance(obs.get("visibility_m"), units_),
             "observed": fmt.at(obs.get("observed_at")),
             "station": f"{obs.get('station')} ({obs.get('station_name')})",
+            "station_distance": _distance(obs.get("distance_km"), units_),
             "source": "NWS station report",
         }
+        reading_from = _reading_from(obs)
         sources.append(f"NWS observation {obs.get('station')}")
         if obs.get("stale_copy"):
             notes.append("Latest station report could not be refreshed; showing the last one received")
     elif om_current:
+        reading_from = "model estimate"
         current = {
             "temp": units.temp(om_current.get("temperature_2m"), units_),
             "feels_like": units.temp(om_current.get("apparent_temperature"), units_),
@@ -331,6 +377,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
             "station": obs.get("station"),
             "source": "NWS station report (old)",
         }
+        reading_from = _reading_from(obs)
         notes.append(f"Only an old station report is available ({obs.get('age_min')} min old)")
 
     next_hours = _om_hours(om, fmt, 8)  # for the card's "next hours" line only
@@ -384,6 +431,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         "alerts": _compact_alerts(alerts, fmt),
         "units": units_,
         "_next_hours": next_hours,
+        "_reading_from": reading_from,
         "_sun": sun,
         "_alerts_checked": alerts_checked,
         "_sky": sky,

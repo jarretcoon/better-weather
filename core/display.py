@@ -70,7 +70,9 @@ def now_card(r: dict[str, Any]) -> str:
         feels = c.get("feels_like")
         feels_txt = f" · feels {_num_temp(feels)}" if feels and feels != temp else ""
         sky = str(c.get("sky") or "").lower()
-        lines.append(f"{icon(c.get('sky'), not is_night)} **{temp}** {sky}{feels_txt}".rstrip())
+        source = r.get("_reading_from")  # "KDSM 12 min ago" / "model estimate"; nothing for a station next door
+        lines.append(f"{icon(c.get('sky'), not is_night)} **{temp}**" + (f" {sky}" if sky else "") + feels_txt
+                     + (f" · {source}" if source else ""))
         bits = []
         if c.get("wind"):
             bits.append(f"💨 {c['wind']}")
