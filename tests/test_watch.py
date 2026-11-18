@@ -122,17 +122,68 @@ def test_broken_extras_never_block_a_warning(monkeypatch):
     assert "TORNADO WARNING" in message and state["sent"]
 
 
-def test_cancel_or_upgrade_without_references_is_not_pushed_and_ends_the_old_one():
-    upgraded = _feature("u1", "Gale Watch", vtec_action="UPG", phen="GL", sig="A", etn="0006", instruction="")
+def test_cancel_or_upgrade_notices_are_not_news_and_the_old_alert_ends_after_two_misses():
+    """As in the live feed: CAN and UPG notices are messageType "Cancel" (dropped, and /alerts/active doesn't list
+    them), so a cancelled alert just vanishes and ends after two misses like any other."""
+    upgraded = _feature("u1", "Gale Watch", vtec_action="UPG", phen="GL", sig="A", etn="0006", msg="Cancel",
+                        instruction="")
     http.set_transport_for_tests(_serve([upgraded]))
     assert watch.check({**CONFIG, "level": "all"}, {})[0] == ""  # a replaced watch is not news
 
     http.set_transport_for_tests(_serve([_feature("w1", "Tornado Watch", sig="A", etn="0101", instruction="")]))
     _, state = watch.check(CONFIG, {})
     http.set_transport_for_tests(_serve([_feature("w2", "Tornado Watch", sig="A", etn="0101", vtec_action="CAN",
-                                                  instruction="")]))
+                                                  msg="Cancel", refs=["w1"], instruction="")]))
     message, state = watch.check(CONFIG, state)
-    assert message == "✅ Tornado Watch for Des Moines, IA was cancelled." and state["sent"] == {}
+    assert message == ""
+    message, state = watch.check(CONFIG, state)
+    assert message == "✅ Tornado Watch for Des Moines, IA has ended or expired." and state["sent"] == {}
+
+
+def test_an_expiry_notice_ends_the_alert_right_away():
+    """EXP notices are "Update"/"Alert" messages in the live feed, so they do come through."""
+    http.set_transport_for_tests(_serve([_feature("w1", "Winter Storm Warning", phen="WS", etn="0004")]))
+    _, state = watch.check(CONFIG, {})
+    http.set_transport_for_tests(_serve([_feature("w2", "Winter Storm Warning", phen="WS", etn="0004",
+                                                  vtec_action="EXP", msg="Update", refs=["w1"])]))
+    message, state = watch.check(CONFIG, state)
+    assert message == "✅ Winter Storm Warning for Des Moines, IA has expired." and state["sent"] == {}
+
+
+def test_a_watch_upgraded_to_a_warning_is_not_an_all_clear():
+    """KMQT, 2026-11-18: a Gale Watch upgraded to a Gale Warning. The UPG notice is a "Cancel" (dropped) and the new
+    warning doesn't reference the watch, so the watch just vanished: "✅ … has ended or expired" 4 min later."""
+    config = {**CONFIG, "name": "Marquette, MI", "timezone": "America/Detroit"}
+    http.set_transport_for_tests(_serve([_feature("g1", "Gale Watch", phen="GL", sig="A", etn="0031",
+                                                  instruction="")]))
+    _, state = watch.check(config, {})
+    upgrade = [_feature("g2", "Gale Warning", phen="GL", sig="W", etn="0045", instruction=""),
+               _feature("g3", "Gale Watch", vtec_action="UPG", phen="GL", sig="A", etn="0031", msg="Cancel",
+                        instruction="")]
+    http.set_transport_for_tests(_serve(upgrade))
+    message, state = watch.check(config, state)
+    assert message.startswith("⚠️ GALE WARNING — Marquette, MI") and "✅" not in message
+    message, state = watch.check(config, state)
+    assert message == "⬆️ Gale Watch for Marquette, MI was upgraded to Gale Warning."
+    assert list(state["sent"]) == ["KDMX.GL.W.0045"]
+
+
+def test_an_upgrade_up_a_ladder_and_not_an_old_warning():
+    http.set_transport_for_tests(_serve([_feature("t1", "Tropical Storm Warning", phen="TR", etn="1001",
+                                                  instruction=""),
+                                         _feature("s1", "Winter Storm Watch", phen="WS", sig="A", etn="0009",
+                                                  instruction=""),
+                                         _feature("s2", "Winter Storm Warning", phen="WS", etn="0008",
+                                                  instruction="")]))
+    _, state = watch.check(CONFIG, {})
+    state["sent"]["KDMX.WS.W.0008"]["at"] -= 6 * 3600   # a warning for the storm before, up for hours
+    http.set_transport_for_tests(_serve([_feature("h1", "Hurricane Warning", phen="HU", etn="1001", instruction=""),
+                                         _feature("s2", "Winter Storm Warning", phen="WS", etn="0008",
+                                                  instruction="")]))
+    _, state = watch.check(CONFIG, state)
+    message, state = watch.check(CONFIG, state)
+    assert message.split("\n\n") == ["⬆️ Tropical Storm Warning for Des Moines, IA was upgraded to Hurricane Warning.",
+                                      "✅ Winter Storm Watch for Des Moines, IA has ended or expired."]
 
 
 def test_alert_without_vtec_keeps_its_key_through_updates():

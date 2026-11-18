@@ -109,9 +109,50 @@ def _format_new(alert: dict[str, Any], place: str, fmt_time: Any) -> str:
     return "\n".join(lines)
 
 
-# VTEC actions that mean the event is over or has been replaced by another one.
+# VTEC actions that mean the event is over or has been replaced by another one. (The NWS's feed sends CAN and UPG as
+# "Cancel" messages, which nws.normalize_alerts drops and /alerts/active doesn't list: those alerts just vanish.)
 _OVER = {"CAN": "was cancelled", "UPG": "was replaced by a stronger alert", "EXP": "has expired"}
 MISSES_BEFORE_ENDED = 2  # an alert must be missing from 2 checks in a row before we say it ended
+ENDED = "has ended or expired"
+# An upgrade: the old alert vanishes as a stronger one from the same office appears (the new one doesn't reference
+# it). Stronger = the warning of the same hazard (a watch or advisory), or higher up one of these ladders.
+UPGRADE_WINDOW_S = 20 * 60        # the stronger alert first seen this close to when the old one went missing
+_LADDERS = (
+    ("WW.Y", "WS.A", "LE.A", "WS.W", "LE.W", "IS.W", "BZ.W"),   # winter
+    ("WI.Y", "HW.A", "HW.W"),                                   # wind
+    ("SC.Y", "GL.A", "GL.W", "SR.A", "SR.W", "HF.A", "HF.W"),   # marine wind
+    ("TR.A", "TR.W", "HU.W"), ("TR.W", "TY.W"),                 # tropical
+    ("HT.Y", "EH.A", "EH.W"), ("CW.Y", "EC.A", "EC.W"), ("FR.Y", "FZ.A", "FZ.W"),
+)
+# Watches and advisories that run alongside their own warnings (a county watch, storm-drawn warnings inside it)
+_ALONGSIDE = {"TO", "SV", "FF", "FA", "FL", "EW", "SQ", "MA", "DS"}
+
+
+def _stronger(old: str, new: str) -> bool:
+    """True when VTEC hazard `new` ("GL.W") replaces `old` ("GL.A") as an upgrade."""
+    (old_ph, old_sig), (new_ph, new_sig) = old.split("."), new.split(".")
+    if new_sig != "W":
+        return False
+    if old_ph == new_ph and old_sig in {"A", "Y"} and old_ph not in _ALONGSIDE:
+        return True
+    return any(old in ladder and new in ladder and ladder.index(new) > ladder.index(old) for ladder in _LADDERS)
+
+
+def _upgraded_to(key: str, entry: dict[str, Any], current: dict[str, dict[str, Any]],
+                 sent: dict[str, dict[str, Any]]) -> str | None:
+    """The event that replaced the vanished alert under `key`, if a stronger one from its office just appeared."""
+    parts = key.split(".")
+    if "|" in key or len(parts) != 4:
+        return None
+    office, hazard = parts[0], f"{parts[1]}.{parts[2]}"
+    since = float(entry.get("gone_at") or time.time()) - UPGRADE_WINDOW_S
+    for other, alert in current.items():
+        bits = other.split(".")
+        if "|" in other or len(bits) != 4 or bits[0] != office or not _stronger(hazard, f"{bits[1]}.{bits[2]}"):
+            continue
+        if float((sent.get(other) or {}).get("at") or 0) >= since:   # new, not one that was already up
+            return str(alert["event"])
+    return None
 
 
 def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -182,6 +223,7 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
                          "at": time.time(), "missed": 0}
             continue
         previous["missed"] = 0
+        previous.pop("gone_at", None)
         previous["id"] = alert["id"]
         new_end = alert.get("ends")
         if new_end and new_end != previous.get("ends"):
@@ -199,11 +241,17 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
             continue   # not a VTEC product: the copy can't list it, so its absence says nothing
         if reason is None:  # just missing from this response: wait for a second miss before believing it
             entry["missed"] = int(entry.get("missed") or 0) + 1
+            entry.setdefault("gone_at", time.time())
             if entry["missed"] < MISSES_BEFORE_ENDED:
                 continue
-            reason = "has ended or expired"
+            reason = ENDED
+        upgrade = _upgraded_to(key, entry, current, sent) if reason in (ENDED, _OVER["UPG"]) else None
         del sent[key]
-        if _push_ended(str(entry.get("event") or "")):
+        if not _push_ended(str(entry.get("event") or "")):
+            continue
+        if upgrade:   # not an all-clear: the stronger alert is in effect (and was pushed as new)
+            messages.append(f"⬆️ {entry['event']} for {place} was upgraded to {upgrade}.")
+        else:
             messages.append(f"✅ {entry['event']} for {place} {reason}.")
 
     state["sent"] = sent
