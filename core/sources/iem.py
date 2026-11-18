@@ -5,7 +5,8 @@ alerts couldn't be checked. Iowa State's mesonet keeps a near-real-time copy of 
 advisory (VTEC) from every office. This turns its answer for one spot into the NWS API's own shape — the same
 VTEC codes, so a warning keeps the key it was pushed under when the NWS comes back — with what it lacks said
 plainly: the full text of each (a link to it instead) and the few products that aren't VTEC (special weather
-statements). Only the products in effect now are kept: the spot's events joined with the live list.
+statements, avalanche watches and the like). Only the products in effect now are kept: the spot's events joined
+with the live list.
 """
 
 from __future__ import annotations
@@ -20,21 +21,51 @@ from ..clock import now_utc
 BASE = "https://mesonet.agron.iastate.edu"
 SOURCE = "NWS warnings via Iowa State's mesonet"
 LIMITS = ("The National Weather Service's alert service didn't answer, so these come from the Iowa Environmental "
-          "Mesonet's copy of its warnings, watches and advisories: special weather statements and the full text "
-          "of each aren't in it.")
+          "Mesonet's copy of its warnings, watches and advisories: it leaves out the full text of each and some "
+          "kinds of alert, such as special weather statements and avalanche watches.")
 TTL = 120
 _GONE = {"CAN", "EXP", "UPG"}    # an event's last action that ends it (in every zone it covers)
 _LOOKBACK_DAYS = 45              # if the live list can't say how far back its oldest event goes
+_AHEAD_DAYS = 10                 # at least this far ahead: events that start later than the live list says
 _STALE_AFTER = timedelta(hours=2)  # newest update anywhere in the country older than this: the copy has stalled
 # Storm-based warnings drawn as polygons: the mesonet's by-point list matches them by county, so they need a hit in
-# its polygon lookup too — the NWS matches them by polygon. (Flood warnings stay matched by county: over-warning is
-# the safe side, and they don't flap.)
-_POLYGON = {("TO", "W"), ("SV", "W"), ("FF", "W"), ("EW", "W"), ("SQ", "W"), ("MA", "W"), ("DS", "W")}
+# its polygon lookup too — the NWS matches them by polygon. Flood advisories are polygons as well, and a wet day
+# brings a dozen per county (Homestead FL, 2026-11-18: 4 by county, 1 from the NWS). (Flood warnings stay matched
+# by county: over-warning is the safe side, and they don't flap.)
+_POLYGON = {("TO", "W"), ("SV", "W"), ("FF", "W"), ("EW", "W"), ("SQ", "W"), ("MA", "W"), ("DS", "W"), ("FA", "Y")}
 # The VTEC office of offices outside the lower 48, when the event's own link doesn't give it (the mesonet's links do;
 # its 3-letter ids don't always match: San Juan is JSJ there).
 _OFFICE = {"AFC": "PAFC", "AFG": "PAFG", "AJK": "PAJK", "HFO": "PHFO", "GUM": "PGUM", "SJU": "TJSJ", "JSJ": "TJSJ",
            "AAQ": "PAAQ", "HEB": "PHEB", "PPG": "NSTU"}
 _LINK_WFO = re.compile(r"wfo=([A-Z]{4})")
+# Where the NWS issues alerts (land, coastal and offshore waters), as generous boxes: (south, north, west, east).
+# Outside all of them the copy has nothing to say — an empty answer there would read as "no alerts" for Berlin.
+# Near a border (Toronto and Tijuana are inside a box) the NWS's own grid lookup decides: see nws.alerts_at.
+_NWS_AREA = (
+    (24.0, 50.5, -132.0, -64.0),      # the lower 48, the Great Lakes and their waters
+    (18.0, 31.0, -98.5, -79.0),       # the Gulf's offshore waters
+    (50.0, 73.0, -180.0, -129.0),     # Alaska
+    (50.0, 56.0, 165.0, 180.0),       # the western Aleutians
+    (15.0, 31.0, -180.0, -150.0),     # Hawaii
+    (14.0, 21.0, -72.0, -60.0),       # Puerto Rico and the Virgin Islands
+    (0.0, 22.0, 130.0, 175.0),        # Guam, the Marianas and the islands Guam's office covers
+    (-15.5, -10.0, -171.3, -168.0),   # American Samoa
+)
+NOT_COVERED = "this spot is outside the National Weather Service's alert area"
+
+
+class NotCovered(http.FetchError):
+    """The spot is outside the National Weather Service's alert area (abroad): its alerts can't be checked there,
+    which is never the same as "no alerts" (a FetchError, so every caller already treats it as "couldn't check")."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__(url, NOT_COVERED, 400)
+
+
+def in_nws_area(lat: float, lon: float) -> bool:
+    """False when the spot is clearly outside where the NWS issues alerts (a coarse test: no network)."""
+    lon = (lon + 180.0) % 360.0 - 180.0
+    return any(south <= lat <= north and west <= lon <= east for south, north, west, east in _NWS_AREA)
 
 
 def office(wfo: str, link: str = "") -> str:
@@ -75,7 +106,9 @@ def alerts_at(lat: float, lon: float) -> http.Fetched:
     """The NWS alerts in effect at the spot, from the mesonet, as an api.weather.gov `alerts/active` answer.
 
     Raises FetchError when it can't say — an answer that doesn't look right, a copy that has stalled, or a surprise in
-    it — so a caller never takes "couldn't check" for "no alerts"."""
+    it — so a caller never takes "couldn't check" for "no alerts"; NotCovered for a spot outside the NWS's area."""
+    if not in_nws_area(lat, lon):
+        raise NotCovered(BASE)
     try:
         return _read(lat, lon)
     except http.FetchError:
@@ -96,11 +129,15 @@ def _read(lat: float, lon: float) -> http.Fetched:
     # in effect: any of an event's rows (one per group of zones) is still going
     active = {(r.get("wfo"), r.get("phenomena"), r.get("significance"), r.get("eventid"), r.get("year"))
               for r in rows if isinstance(r, dict) and str(r.get("status") or "") not in _GONE}
-    oldest = min((t for t in (_when(r.get("issue")) for r in rows if isinstance(r, dict)) if t),
-                 default=now - timedelta(days=_LOOKBACK_DAYS))
+    starts = [t for t in (_when(r.get("issue")) for r in rows if isinstance(r, dict)) if t]
+    oldest = min(starts, default=now - timedelta(days=_LOOKBACK_DAYS))
+    # The by-point list picks events by their START, and its end date is exclusive: it must reach past the latest
+    # start of anything in effect (a watch can start days out), or an alert starting after the next UTC midnight is
+    # missed — a false "has ended" push during an NWS outage, then a second "new" push when the NWS is back.
+    latest = max(starts, default=now)
     window = {"lat": round(lat, 3), "lon": round(lon, 3),
               "sdate": (min(oldest, now) - timedelta(days=1)).date().isoformat(),
-              "edate": (now + timedelta(days=1)).date().isoformat()}
+              "edate": (max(latest + timedelta(days=2), now + timedelta(days=_AHEAD_DAYS))).date().isoformat()}
     spot = http.get_json(f"{BASE}/json/vtec_events_bypoint.py", window, ttl=TTL, max_stale=15 * 60)
     events = spot.data.get("events") if isinstance(spot.data, dict) else None
     if not isinstance(events, list):

@@ -20,8 +20,10 @@ import json
 import logging
 import os
 import re
+import tempfile
+import threading
 import time
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,13 @@ SCRIPT_NAME = "better-weather-alerts.py"
 LEVELS = ("warnings", "watches", "all")
 FAIL_NOTICE_AFTER = 10          # consecutive failed checks (~20 min at every 2m) before saying so
 INSTRUCTION_CHARS = 450
+STARTS_LATER = timedelta(minutes=5)   # an alert starting later than this says "from … to …", not "until …"
+LOCK_NAME = "watch.lock"
+RUN_BUDGET_S = 100              # a run gives up after this (the job runs every 2 minutes) and counts as a failed check
+# A lock older than a whole run was left by one that was killed (Hermes stops a script with SIGTERM, which skips
+# `finally`): the next run takes it over, so a kill costs one check, not several.
+LOCK_STALE_S = RUN_BUDGET_S + 30
+EXTRAS_MIN_S = 10               # the freeze/rain heads-ups only start with this much of the budget left
 _VTEC = re.compile(r"/[OTEX]\.([A-Z]{3})\.([A-Z]{4})\.([A-Z]{2})\.([A-Z])\.(\d{4})\.")
 
 
@@ -50,9 +59,70 @@ def _load(path: Path, default: Any) -> Any:
 
 
 def _save(path: Path, data: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, indent=1, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())   # a power cut must not leave an empty state (it would re-push every alert)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _lock(path: Path) -> str | None:
+    """Take the run lock (an O_EXCL file): a token to release it with, or None while another run holds it."""
+    token = f"{os.getpid()} {time.time()}"
+    for _ in range(3):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+            except FileNotFoundError:
+                continue   # released just now
+            if age < LOCK_STALE_S:
+                return None
+            path.unlink(missing_ok=True)   # left by a run that died or hung: take it over
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token)
+        return token
+    return None
+
+
+def _unlock(path: Path, token: str) -> None:
+    try:
+        if path.read_text(encoding="utf-8") == token:   # still ours (not taken over after a very long run)
+            path.unlink()
+    except OSError:
+        pass
+
+
+class _OutOfTime(Exception):
+    pass
+
+
+def _within(seconds: float, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """fn(*args, **kwargs), or _OutOfTime after `seconds` (the call is left to finish in a daemon thread, which
+    the cron script's exit ends: nothing it does after that is used)."""
+    box: dict[str, Any] = {}
+
+    def work() -> None:
+        try:
+            box["result"] = fn(*args, **kwargs)
+        except BaseException as exc:
+            box["error"] = exc
+
+    worker = threading.Thread(target=work, name="better-weather-push", daemon=True)
+    worker.start()
+    worker.join(max(0.0, seconds))
+    if worker.is_alive():
+        raise _OutOfTime
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
 
 
 # --- alert identity ---------------------------------------------------------------------------------
@@ -83,10 +153,16 @@ def _push_ended(event: str) -> bool:
 
 # --- the check ------------------------------------------------------------------------------------
 
-def _format_new(alert: dict[str, Any], place: str, fmt_time: Any) -> str:
+def _format_new(alert: dict[str, Any], place: str, fmt_time: Any, now: datetime) -> str:
     mark = "🚨" if alert.get("life_threatening") else "⚠️"
     until = fmt_time(alert.get("ends"))
-    lines = [f"{mark} {alert['event'].upper()} — {place}" + (f", until {until}" if until else "")]
+    starts = units.parse_time(alert.get("starts"))
+    if starts is not None and starts.tzinfo is not None and starts > now + STARTS_LATER:   # a watch for tomorrow
+        to = fmt_time(alert.get("ends"), alert.get("starts"))
+        when = f", from {fmt_time(alert.get('starts'))}" + (f" to {to}" if to else "")
+    else:
+        when = f", until {until}" if until else ""
+    lines = [f"{mark} {alert['event'].upper()} — {place}{when}"]
     details = alert.get("details") or {}
     extra = []
     if details.get("tornadoDetection"):
@@ -100,31 +176,117 @@ def _format_new(alert: dict[str, Any], place: str, fmt_time: Any) -> str:
     if extra:
         lines.append(" · ".join(extra))
     if alert.get("headline"):
-        lines.append(str(alert["headline"]))
-    instruction = (alert.get("instruction") or "").strip()
+        lines.append(_flat(alert["headline"]))
+    instruction = _flat(alert.get("instruction") or "", INSTRUCTION_CHARS)
     if instruction:
-        cut = instruction[:INSTRUCTION_CHARS]
-        lines.append(cut + ("…" if len(instruction) > INSTRUCTION_CHARS else ""))
+        lines.append(instruction)
     lines.append("— National Weather Service")
     return "\n".join(lines)
 
 
-# VTEC actions that mean the event is over or has been replaced by another one.
+def _flat(text: Any, limit: int | None = None) -> str:
+    """NWS text comes hard-wrapped at ~70 columns ("…possible Flood\nWarnings…"): join it, cut at a word."""
+    flat = " ".join(str(text).split())
+    if limit is None or len(flat) <= limit:
+        return flat
+    return flat[:limit].rsplit(" ", 1)[0] + "…"
+
+
+# VTEC actions that mean the event is over or has been replaced by another one. (The NWS's feed sends CAN and UPG as
+# "Cancel" messages, which nws.normalize_alerts drops and /alerts/active doesn't list: those alerts just vanish.)
 _OVER = {"CAN": "was cancelled", "UPG": "was replaced by a stronger alert", "EXP": "has expired"}
 MISSES_BEFORE_ENDED = 2  # an alert must be missing from 2 checks in a row before we say it ended
+ENDED = "has ended or expired"
+# An upgrade: the old alert vanishes as a stronger one from the same office appears (the new one doesn't reference
+# it). Stronger = the warning of the same hazard (a watch or advisory), or higher up one of these ladders.
+UPGRADE_WINDOW_S = 20 * 60        # the stronger alert first seen this close to when the old one went missing
+_LADDERS = (
+    ("WW.Y", "WS.A", "LE.A", "WS.W", "LE.W", "IS.W", "BZ.W"),   # winter
+    ("WI.Y", "HW.A", "HW.W"),                                   # wind
+    ("SC.Y", "GL.A", "GL.W", "SR.A", "SR.W", "HF.A", "HF.W"),   # marine wind
+    ("TR.A", "TR.W", "HU.W"), ("TR.W", "TY.W"),                 # tropical
+    ("HT.Y", "EH.A", "EH.W"), ("CW.Y", "EC.A", "EC.W"), ("FR.Y", "FZ.A", "FZ.W"),
+)
+# Watches and advisories that run alongside their own warnings (a county watch, storm-drawn warnings inside it)
+_ALONGSIDE = {"TO", "SV", "FF", "FA", "FL", "EW", "SQ", "MA", "DS"}
 
 
-def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """One pass. Returns (message or "", new state). Pure apart from the network fetches."""
+def _stronger(old: str, new: str) -> bool:
+    """True when VTEC hazard `new` ("GL.W") replaces `old` ("GL.A") as an upgrade."""
+    (old_ph, old_sig), (new_ph, new_sig) = old.split("."), new.split(".")
+    if new_sig != "W":
+        return False
+    if old_ph == new_ph and old_sig in {"A", "Y"} and old_ph not in _ALONGSIDE:
+        return True
+    return any(old in ladder and new in ladder and ladder.index(new) > ladder.index(old) for ladder in _LADDERS)
+
+
+def _upgraded_to(key: str, entry: dict[str, Any], current: dict[str, dict[str, Any]],
+                 sent: dict[str, dict[str, Any]]) -> str | None:
+    """The event that replaced the vanished alert under `key`, if a stronger one from its office just appeared."""
+    parts = key.split(".")
+    if "|" in key or len(parts) != 4:
+        return None
+    office, hazard = parts[0], f"{parts[1]}.{parts[2]}"
+    since = float(entry.get("gone_at") or time.time()) - UPGRADE_WINDOW_S
+    for other, alert in current.items():
+        bits = other.split(".")
+        if "|" in other or len(bits) != 4 or bits[0] != office or not _stronger(hazard, f"{bits[1]}.{bits[2]}"):
+            continue
+        if float((sent.get(other) or {}).get("at") or 0) >= since:   # new, not one that was already up
+            return str(alert["event"])
+    return None
+
+
+def _failed(state: dict[str, Any]) -> str | None:
+    """Count one failed check; the notice when the alert service has been out for about 20 minutes."""
+    state["failures"] = int(state.get("failures") or 0) + 1
+    if state["failures"] == FAIL_NOTICE_AFTER:
+        return ("⚠️ Better Weather can't reach the NWS alert service. Warnings won't be pushed until it's back; "
+                "check weather.gov if storms are near.")
+    return None
+
+
+def _zone(config: dict[str, Any], lat: float, lon: float) -> tzinfo | None:
+    """The place's own zone: the saved one, else looked up (the NWS's grid, then Open-Meteo; both kept for weeks).
+    Never UTC by default: that shifted the rain hours and the 3 PM freeze check. None only when nothing answers."""
+    name = config.get("timezone")
+    if not name:
+        try:
+            name = (nws.point(lat, lon) or {}).get("timeZone")
+        except http.FetchError:
+            name = None
+    if not name:
+        try:
+            name = openmeteo.timezone_at(lat, lon)
+        except http.FetchError:
+            name = None
+    return units.zone(str(name)) if name else None
+
+
+def check(config: dict[str, Any], state: dict[str, Any], *,
+          deadline: float | None = None) -> tuple[str, dict[str, Any]]:
+    """One pass. Returns (message or "", new state). Pure apart from the network fetches. With a `deadline`
+    (time.monotonic()), the optional extras get only the time left before it: they never cost a warning."""
     place = str(config.get("name") or "home")
     lat, lon = float(config["lat"]), float(config["lon"])
     level = str(config.get("level")) if config.get("level") in LEVELS else "watches"
-    tz = units.zone(config.get("timezone"))
-    now = now_utc().astimezone(tz)
+    tz = _zone(config, lat, lon)
+    now = now_utc().astimezone(tz or UTC)
+    clock = config.get("clock") or "12h"
 
-    def fmt_time(value: Any) -> str | None:
-        dt = units.parse_time(value)
-        return units.day_clock(dt.astimezone(tz), config.get("clock") or "12h", now) if dt else None
+    def local(dt: datetime) -> datetime:   # zone unknown: the time's own offset (the NWS's times are local)
+        return dt.astimezone(tz) if tz is not None else dt
+
+    def fmt_time(value: Any, after: Any = None) -> str | None:
+        """'3 PM', 'tomorrow 3 PM', 'Wed 3 PM'; just '9 PM' on the day of `after` ('from tomorrow 3 AM to 9 PM')."""
+        dt, first = units.parse_time(value), units.parse_time(after)
+        if dt is None:
+            return None
+        when = local(dt)
+        if first is not None and first.tzinfo is not None and local(first).date() == when.date():
+            return units.clock(when, clock)
+        return units.day_clock(when, clock, now.astimezone(when.tzinfo) if when.tzinfo else now)
 
     messages: list[str] = []
     state = copy.deepcopy(state)  # never mutate the caller's copy (it is what gets saved on a crash)
@@ -134,12 +296,18 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
         fetched = nws.alerts_at(lat, lon, ttl=0)  # always ask the NWS fresh (else the mesonet's copy: iem.py)
         if fetched.stale:
             raise http.FetchError(fetched.url, "only a stale copy was available")
+    except nws.NotCovered:   # abroad (set up before push setup checked): say so once a day, never "no alerts"
+        if _rate_limited(state, "coverage_notice_at", 24):
+            messages.append(f"⚠️ Better Weather warning pushes are US-only, and {place} is outside the National "
+                            "Weather Service's area, so nothing will be pushed. Run: hermes better-weather push "
+                            "setup (with a US place), or remove the job: hermes cron remove better-weather-alerts")
+        state["sent"] = sent
+        return "\n\n".join(messages), state
     except http.FetchError as exc:
-        failures = int(state.get("failures") or 0) + 1
-        state["failures"] = failures
-        if failures == FAIL_NOTICE_AFTER:
-            messages.append(f"⚠️ Better Weather can't reach the NWS alert service ({exc}). "
-                            "Warnings won't be pushed until it's back; check weather.gov if storms are near.")
+        logger.info("better-weather: alert check failed: %s", exc)
+        notice = _failed(state)
+        if notice:
+            messages.append(notice)
         state["sent"] = sent
         return "\n\n".join(messages), state
 
@@ -170,11 +338,12 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
         previous = sent.get(key)
         if previous is None:
             source = "\n(From Iowa State's copy of NWS warnings: the NWS didn't answer.)" if via_copy else ""
-            messages.append(_format_new(alert, place, fmt_time) + source)
+            messages.append(_format_new(alert, place, fmt_time, now) + source)
             sent[key] = {"event": alert["event"], "ends": alert.get("ends"), "id": alert["id"],
                          "at": time.time(), "missed": 0}
             continue
         previous["missed"] = 0
+        previous.pop("gone_at", None)
         previous["id"] = alert["id"]
         new_end = alert.get("ends")
         if new_end and new_end != previous.get("ends"):
@@ -192,16 +361,29 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
             continue   # not a VTEC product: the copy can't list it, so its absence says nothing
         if reason is None:  # just missing from this response: wait for a second miss before believing it
             entry["missed"] = int(entry.get("missed") or 0) + 1
+            entry.setdefault("gone_at", time.time())
             if entry["missed"] < MISSES_BEFORE_ENDED:
                 continue
-            reason = "has ended or expired"
+            reason = ENDED
+        upgrade = _upgraded_to(key, entry, current, sent) if reason in (ENDED, _OVER["UPG"]) else None
         del sent[key]
-        if _push_ended(str(entry.get("event") or "")):
+        if not _push_ended(str(entry.get("event") or "")):
+            continue
+        if upgrade:   # not an all-clear: the stronger alert is in effect (and was pushed as new)
+            messages.append(f"⬆️ {entry['event']} for {place} was upgraded to {upgrade}.")
+        else:
             messages.append(f"✅ {entry['event']} for {place} {reason}.")
 
     state["sent"] = sent
-    try:  # the optional extras must never cost a warning
-        messages.extend(_extras(config, state, lat, lon, now))
+    try:  # the optional extras must never cost a warning, nor the time a run has for it
+        if deadline is None:
+            messages.extend(_extras(config, state, lat, lon, now))
+        elif deadline - time.monotonic() >= EXTRAS_MIN_S and (config.get("freeze") or config.get("rain")):
+            mine = copy.deepcopy(state)   # a slow forecast left running must not change the state being saved
+            messages.extend(_within(deadline - time.monotonic(), _extras, config, mine, lat, lon, now))
+            state = mine
+    except _OutOfTime:
+        logger.info("better-weather: freeze/rain extras ran out of time")
     except Exception:
         logger.warning("better-weather: freeze/rain extras failed", exc_info=True)
     return "\n\n".join(messages), state
@@ -245,7 +427,8 @@ def _freeze(config: dict[str, Any], state: dict[str, Any], rows: list[dict[str, 
     state["last_freeze_night"] = today.isoformat()
     recent = [r for r in rows if now - timedelta(days=FREEZE_QUIET_NIGHTS) <= r["dt"] <= now - timedelta(hours=3)]
     limit = 0.0 if threshold is None else threshold
-    if any((units.num(r.get("temperature_2m")) or 99) <= limit for r in recent):
+    temps = (units.num(r.get("temperature_2m")) for r in recent)
+    if any(t is not None and t <= limit for t in temps):   # (0.0 °C is a freeze, not "no reading")
         return None  # it already froze in the last few nights (works even with no saved history)
     if last:
         try:
@@ -275,7 +458,8 @@ def _rain_soon(config: dict[str, Any], state: dict[str, Any], data: dict[str, An
         likely = (units.num(row.get("precipitation_probability")) or 0) >= 60
         if likely and (units.num(row.get("precipitation")) or 0) >= 0.2:
             state["rain_at"] = time.time()
-            snowy = (units.num(row.get("snowfall")) or 0) > 0 or (units.num(row.get("temperature_2m")) or 5) <= 0.5
+            temp = units.num(row.get("temperature_2m"))   # (0.0 °C is cold enough, not "no reading")
+            snowy = (units.num(row.get("snowfall")) or 0) > 0 or (temp is not None and temp <= 0.5)
             kind = "🌨️ Snow" if snowy else "☔ Rain"
             return f"{kind} likely to start in {config.get('name') or 'home'} within the hour."
     return None
@@ -288,6 +472,8 @@ def _extras(config: dict[str, Any], state: dict[str, Any], lat: float, lon: floa
         data = openmeteo.forecast(lat, lon, 2, past_days=FREEZE_QUIET_NIGHTS).data or {}
     except http.FetchError:
         return []
+    if data.get("timezone") or data.get("utc_offset_seconds") is not None:   # its hours are in its own zone
+        now = now.astimezone(units.zone(data.get("timezone"), data.get("utc_offset_seconds")))
     rows = _rows(data.get("hourly") or {}, now)
     out = []
     if config.get("freeze"):
@@ -307,7 +493,23 @@ def _rate_limited(state: dict[str, Any], key: str, hours: float) -> bool:
 
 
 def run(data_dir: Path) -> str:
-    """Entry point for the cron script. Prints nothing on a quiet tick; problems are reported rarely."""
+    """Entry point for the cron script. Prints nothing on a quiet tick; problems are reported rarely.
+
+    One run at a time (a lock file; a run that finds it held stays quiet), and each gives up after RUN_BUDGET_S:
+    a slow NWS can't pile runs up on the 2-minute schedule."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    lock = data_dir / LOCK_NAME
+    token = _lock(lock)
+    if token is None:
+        return ""   # the run before is still going: it says whatever there is to say
+    try:
+        return _run(data_dir)
+    finally:
+        _unlock(lock, token)
+
+
+def _run(data_dir: Path) -> str:
+    started = time.monotonic()
     state_path = data_dir / STATE_NAME
     state = _load(state_path, {})
     config = _load(data_dir / CONFIG_NAME, None)
@@ -321,8 +523,12 @@ def run(data_dir: Path) -> str:
     if config.get("paused"):
         return ""
     try:
-        message, state = check(config, state)
+        deadline = started + RUN_BUDGET_S
+        message, state = _within(deadline - time.monotonic(), check, config, state, deadline=deadline - 5)
         state["crashes"] = 0
+    except _OutOfTime:   # the NWS (and its copy) too slow to answer: a failed check, said like any other
+        logger.info("better-weather: alert check ran out of time")
+        message = _failed(state) or ""
     except Exception as exc:  # a bug must say so once, not every 2 minutes
         state["crashes"] = int(state.get("crashes") or 0) + 1
         message = ""
@@ -367,6 +573,10 @@ def write_setup(*, hermes_home: Path, data_dir: Path, core_dir: Path, place: dic
               "timezone": place.get("timezone"), "level": level, "freeze": freeze, "rain": rain,
               "units": units_, "clock": clock}
     data_dir.mkdir(parents=True, exist_ok=True)
+    old = _load(data_dir / CONFIG_NAME, None)
+    if isinstance(old, dict) and (old.get("lat"), old.get("lon")) != (config["lat"], config["lon"]):
+        # a new place: the old place's alerts must not "end" under its name, and its heads-ups don't carry over
+        _save(data_dir / STATE_NAME, {})
     _save(data_dir / CONFIG_NAME, config)
     scripts = hermes_home / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)

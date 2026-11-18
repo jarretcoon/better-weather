@@ -49,12 +49,31 @@ def _chance(pct: Any) -> str:
     return f" · 💧{value}%" if value >= 20 else ""
 
 
+def _day_and_clock(text: str) -> tuple[str, str]:
+    """'tomorrow 3 AM' -> ('tomorrow', '3 AM'); '15:00' -> ('', '15:00')."""
+    parts = text.split()
+    n = 2 if parts and parts[-1] in ("AM", "PM") else 1
+    return " ".join(parts[:-n]), " ".join(parts[-n:])
+
+
+def _when(a: dict[str, Any]) -> str:
+    """' until 8 AM', or for an alert that hasn't started yet ' from tomorrow 3 AM to 8 AM'."""
+    end = a.get("until") or a.get("ends")
+    start = a.get("starts") if a.get("upcoming") else None
+    if not start:
+        return f" until {end}" if end else ""
+    if not end:
+        return f" from {start}"
+    start_day = _day_and_clock(str(start))[0]
+    end_day, end_clock = _day_and_clock(str(end))
+    return f" from {start} to {end_clock if start_day and start_day == end_day else end}"
+
+
 def _alert_lines(alerts: list[dict[str, Any]]) -> list[str]:
     lines = []
     for a in alerts[:4]:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
-        until = a.get("until") or a.get("ends")
-        lines.append(f"{mark} **{a.get('event')}**" + (f" until {until}" if until else ""))
+        lines.append(f"{mark} **{a.get('event')}**{_when(a)}")
     if len(alerts) > 4:
         lines.append(f"…and {len(alerts) - 4} more")
     return lines
@@ -70,7 +89,9 @@ def now_card(r: dict[str, Any]) -> str:
         feels = c.get("feels_like")
         feels_txt = f" · feels {_num_temp(feels)}" if feels and feels != temp else ""
         sky = str(c.get("sky") or "").lower()
-        lines.append(f"{icon(c.get('sky'), not is_night)} **{temp}** {sky}{feels_txt}".rstrip())
+        source = r.get("_reading_from")  # "KDSM 12 min ago" / "model estimate"; nothing for a station next door
+        lines.append(f"{icon(c.get('sky'), not is_night)} **{temp}**" + (f" {sky}" if sky else "") + feels_txt
+                     + (f" · {source}" if source else ""))
         bits = []
         if c.get("wind"):
             bits.append(f"💨 {c['wind']}")
@@ -105,10 +126,46 @@ def now_card(r: dict[str, Any]) -> str:
     elif not warnings:
         warnings = ["⚠️ Alerts weren't checked here"]
     lines.extend(warnings)
-    sun = r.get("_sun") or r.get("sun") or {}
-    if sun.get("sunrise") and sun.get("sunset"):
-        lines.append(f"🌅 {sun['sunrise']} · 🌇 {sun['sunset']}")
+    sky = r.get("_sky")
+    if sky:
+        lines.extend(sky_lines(sky))
+    else:
+        sun = r.get("_sun") or r.get("sun") or {}
+        if sun.get("sunrise") and sun.get("sunset"):
+            lines.append(f"🌅 Sunrise {sun['sunrise']} · 🌇 Sunset {sun['sunset']}")
     return "\n".join(lines).strip()
+
+
+def _moon_label(moon: dict[str, Any]) -> str:
+    name = str(moon.get("phase") or "Moon")
+    name = name if name.lower().endswith("moon") else f"{name} moon"
+    lit = moon.get("lit_pct")
+    # a new moon can't be seen: no "0% lit", no rise or set
+    return f"{moon.get('emoji', '🌙')} {name}" + (f" · {lit}% lit" if isinstance(lit, int) and lit >= 2 else "")
+
+
+def sky_lines(sky: dict[str, Any]) -> list[str]:
+    """Sun by day, moon by night, each emoji with its words: people don't know what a tiny 🌇 means."""
+    moon = sky.get("moon") or {}
+    visible = (moon.get("lit_pct") or 0) >= 2
+    if moon.get("up"):
+        status = f"up now, sets {moon['sets']}" if moon.get("sets") else "up all day"
+    else:
+        status = f"rises {moon['rises']}" if moon.get("rises") else "down all day"
+    moon_line = _moon_label(moon) + (f" · {status}" if visible else "")
+    if sky.get("mode") == "sun":
+        return ["☀️ Sun up all day" if sky.get("sun_all_day")
+                else f"🌅 Sunrise {sky.get('sunrise')} · 🌇 Sunset {sky.get('sunset')}", moon_line]
+    lines = [moon_line]
+    tail = []
+    if sky.get("next_sunrise"):
+        tail.append(f"🌅 Sunrise {sky['next_sunrise']}")
+    nxt = moon.get("next") or {}
+    if nxt.get("date") and nxt.get("phase") != moon.get("phase"):
+        tail.append(f"{nxt.get('emoji')} {nxt.get('phase')} {nxt['date']}")
+    if tail:
+        lines.append(" · ".join(tail))
+    return lines
 
 
 def _daily_from_periods(periods: list[dict[str, Any]]) -> list[str]:
@@ -127,8 +184,9 @@ def _daily_from_periods(periods: list[dict[str, Any]]) -> list[str]:
         name = str(p.get("name") or "")
         short = name if name in {"Today", "This Afternoon"} else (p.get("_dow") or name[:3])
         pop = max((q.get("precip_chance_pct") or 0) for q in (p, night) if q)
-        low = _deg(night.get("temp") if night else None)
-        lines.append(f"**{short}** {icon(p.get('sky'))} {_deg(p.get('temp'))} / {low} · {p.get('sky')}{_chance(pop)}")
+        # a day without its night (the last one, when the list began with "Tonight"): its high alone, no "/ –"
+        temps = f"{_deg(p.get('temp'))} / {_deg(night.get('temp'))}" if night else f"{_deg(p.get('temp'))} high"
+        lines.append(f"**{short}** {icon(p.get('sky'))} {temps} · {p.get('sky')}{_chance(pop)}")
         i += 2 if night else 1
     return lines
 
@@ -137,9 +195,10 @@ def forecast_card(r: dict[str, Any]) -> str:
     name = r["place"]["name"]
     if r.get("hours"):
         rows = r["hours"]
-        stride = 1 if len(rows) <= 12 else 2 if len(rows) <= 24 else 3
+        # every row from first to last, so the rows span the hours the header names (18 lines at most)
+        stride = 1 if len(rows) <= 12 else 2 if len(rows) <= 24 else 3 if len(rows) <= 54 else 4
         lines = [f"**{name}** · next {len(rows)} hours"]
-        for h in rows[::stride][:16]:
+        for h in rows[::stride]:
             day = h["_day"] if isinstance(h.get("_day"), bool) else _daytime(h.get("time"))
             lines.append(f"{h.get('time')} {icon(h.get('sky'), day)} {_deg(h.get('temp'))}"
                          f"{_chance(h.get('precip_chance_pct'))}")
@@ -182,22 +241,58 @@ def alerts_card(r: dict[str, Any]) -> str:
     alerts = r.get("alerts") or []
     where = r.get("where") or (r.get("place") or {}).get("name") or "this place"
     warnings = [n for n in r.get("notes") or [] if n.startswith("⚠️")]
+    # a country that lists warnings by area name: its note says how many orange/red are elsewhere; name them
+    elsewhere = [] if r.get("_exact", True) else _elsewhere(r.get("orange_and_red_in_country") or [])
     if not alerts:
         if r.get("_exact", True):
             return "\n".join([f"✅ No active alerts for {where}", *warnings])
-        return "\n".join([f"**Alerts · {where}**", *(warnings or ["⚠️ Alerts weren't checked here"])])
+        return "\n".join([f"**Alerts · {where}**", *(warnings or ["⚠️ Alerts weren't checked here"]), *elsewhere])
     lines = [f"**Alerts · {where}**"]
+    statewide = r.get("place") is None  # a list for a whole state: say where each one is
     for a in alerts[:5]:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
-        lines.append(f"{mark} **{a['event']}**" + (f" until {a['ends']}" if a.get("ends") else ""))
+        lines.append(f"{mark} **{a['event']}**{_when(a)}")
         if a.get("headline") and str(a["headline"]).strip().lower() != str(a.get("event")).strip().lower():
             lines.append(f"   {a['headline']}")
+        if statewide and a.get("area"):
+            lines.append(f"   📍 {_areas(a['area'])}")
         if a.get("life_threatening") and a.get("instruction"):
             lines.append(f"   👉 {_flat(a['instruction'], 280)}")
     if len(alerts) > 5:
         lines.append(f"…and {len(alerts) - 5} more")
     lines.extend(warnings)
+    lines.extend(elsewhere)
     return "\n".join(lines)
+
+
+def _elsewhere(warnings: list[dict[str, Any]], groups: int = 5) -> list[str]:
+    """Orange and red warnings elsewhere in the country, a line per kind: '🔴 Heavy rain · Kreis Calw, Enzkreis +6'."""
+    kinds: dict[tuple[str, str], tuple[list[str], int]] = {}
+    for w in warnings:
+        names, more = kinds.get((str(w.get("level")), str(w.get("event"))), ([], 0))
+        names.extend(n for n in w.get("regions") or [] if n and n not in names)
+        kinds[(str(w.get("level")), str(w.get("event")))] = (names, more + (w.get("more_regions") or 0))
+    lines = []
+    for (level, event), (names, more) in list(kinds.items())[:groups]:
+        rest = len(names) - 2 + more
+        where = ", ".join(names[:2]) + (f" +{rest}" if rest > 0 else "")
+        lines.append(f"{'🔴' if level == 'red' else '🟠'} {event}" + (f" · {where}" if where else ""))
+    if len(kinds) > groups:
+        lines.append(f"…and {len(kinds) - groups} more")
+    return lines
+
+
+def _areas(text: Any, limit: int = 70) -> str:
+    """An NWS area list cut after whole names: 'Mono; Southern Sierra Nevada; Kern County; Tulare' ->
+    'Mono; Southern Sierra Nevada +2'."""
+    names = [n.strip() for n in str(text).split(";") if n.strip()]
+    shown: list[str] = []
+    for n in names:
+        if shown and len("; ".join([*shown, n])) > limit:
+            break
+        shown.append(n)
+    rest = len(names) - len(shown)
+    return "; ".join(shown) + (f" +{rest}" if rest else "")
 
 
 def _flat(text: Any, limit: int) -> str:

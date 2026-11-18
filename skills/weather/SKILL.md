@@ -1,7 +1,7 @@
 ---
 name: weather
 description: How to answer weather questions with Better Weather — which tool to use, how to send its chat cards and radar/satellite pictures, how to talk about alerts safely, and how to set up warning pushes.
-version: 0.5.0
+version: 0.9.3
 metadata:
   hermes:
     tags: [weather, forecast, alerts, severe-weather, radar, satellite]
@@ -20,6 +20,7 @@ paragraphs or a table, and don't repeat what it says.
 | The user asks… | Use |
 |---|---|
 | Weather now, "is it raining?", "jacket?" | `weather` (no location = home) |
+| Sunrise, sunset, the moon tonight | `weather` (its card and its `sun` and `moon`) |
 | Weekend, next week, hour by hour, "when does the rain start?" | `weather_forecast` (`hourly: true`) |
 | "Any warnings?", details of an alert | `weather_alerts` |
 | Storms, tornado risk, "severe weather today?" | `weather_severe` |
@@ -32,7 +33,7 @@ paragraphs or a table, and don't repeat what it says.
 | Best time to run, mow, grill, wash the car, stargaze | `weather_best_time` |
 | "Which forecast should I trust?" | `weather_scorecard` |
 | Flights, airport delays, weather on arrival | `weather_travel` |
-| Rivers, tides, waves | `weather_water` |
+| Rivers, tides, waves | `weather_water` (tides: `next` are still to come, `last` has passed) |
 | CAPE, shear, tornado ingredients | `weather_science` (`at_peak: true` on storm days) |
 | "Home is Ankeny", "save Mom's place as Ames" | `weather_places` |
 
@@ -50,13 +51,16 @@ paragraphs or a table, and don't repeat what it says.
 
 ## Places
 - No home set: ask where home is, then `weather_places` `action: "set_home"`. Don't guess.
-- "City, ST", "City, Country", ZIP, airport code (KDSM) or "lat,lon" all work. If a `note` says the
-  match was approximate, say which place you used.
+- "City, ST", "City, Country", ZIP, airport code (DSM or KDSM), "lat,lon" and shorthands like LA, NYC
+  or DC all work. A state on its own isn't a place: when the tool asks which place in it, ask the user.
+- If a `note` says the match was approximate or another place has the same name, say which place
+  you used.
 
 ## Honesty
 - 3+ days out, `weather_confidence` keeps you honest: "about 60% of model runs show rain", ranges
   when confidence is low.
-- US history is NOAA station records; elsewhere it's the ERA5 reanalysis, so say "about".
+- US history is NOAA station records; elsewhere it's modelled (the ERA5 reanalysis, and Open-Meteo's
+  forecast models for the last few days), so say "about".
 - The scorecard needs about two weeks of data before it names a winner.
 - Mention a stale or backup source in a few words when a note says so. Keep the units returned.
 
@@ -70,8 +74,9 @@ Briefs with the AI: `/blueprint better-weather:morning-brief`, `:week-ahead`, `:
 
 ## If asked what Better Weather can do
 Answer from this list; don't read the plugin's files.
-- Now, hourly (72 h) and daily (16 days) for any place; official alerts (US, Canada, 38 European
-  countries) and severe-storm risk at the exact spot; radar and satellite pictures
+- Now (with sunrise, sunset and the moon), hourly (72 h) and daily (16 days) for any place;
+  official alerts (US, Canada, 38 European countries) and severe-storm risk at the exact spot;
+  radar and satellite pictures
 - Air quality/smoke/UV/pollen; past weather with normals and records; forecast confidence; the
   forecasters' discussion; which forecast has been most accurate at home
 - Best time for outdoor plans; travel (airports, delays, weather on arrival); rivers, tides, waves;

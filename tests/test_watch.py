@@ -1,19 +1,24 @@
+import argparse
+import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from better_weather.core import cache, clock, http, watch
+from better_weather.core import cache, clock, commands, http, places, settings, watch
+from better_weather.core.places import Place
 
 CONFIG = {"name": "Des Moines, IA", "lat": 41.6, "lon": -93.61, "timezone": "America/Chicago",
           "level": "watches", "clock": "12h"}
 
 
 def _feature(ident, event, vtec_action="NEW", etn="0012", phen="TO", sig="W", ends="2026-11-15T15:45:00-06:00",
-             msg="Alert", refs=(), instruction="TAKE COVER NOW!", vtec=True):
+             msg="Alert", refs=(), instruction="TAKE COVER NOW!", vtec=True, onset="2026-11-15T02:30:00-06:00"):
     feature = {"properties": {
         "id": ident, "event": event, "severity": "Extreme" if "Tornado Warning" in event else "Moderate",
         "status": "Actual", "messageType": msg, "references": [{"identifier": r} for r in refs],
         "headline": f"{event} issued", "description": "...", "instruction": instruction, "ends": ends,
-        "onset": "2026-11-15T15:00:00-06:00",
+        "onset": onset,
         "parameters": {"VTEC": [f"/O.{vtec_action}.KDMX.{phen}.{sig}.{etn}.261115T2100Z-261115T2145Z/"],
                        "tornadoDetection": ["RADAR INDICATED"]},
     }}
@@ -120,17 +125,68 @@ def test_broken_extras_never_block_a_warning(monkeypatch):
     assert "TORNADO WARNING" in message and state["sent"]
 
 
-def test_cancel_or_upgrade_without_references_is_not_pushed_and_ends_the_old_one():
-    upgraded = _feature("u1", "Gale Watch", vtec_action="UPG", phen="GL", sig="A", etn="0006", instruction="")
+def test_cancel_or_upgrade_notices_are_not_news_and_the_old_alert_ends_after_two_misses():
+    """As in the live feed: CAN and UPG notices are messageType "Cancel" (dropped, and /alerts/active doesn't list
+    them), so a cancelled alert just vanishes and ends after two misses like any other."""
+    upgraded = _feature("u1", "Gale Watch", vtec_action="UPG", phen="GL", sig="A", etn="0006", msg="Cancel",
+                        instruction="")
     http.set_transport_for_tests(_serve([upgraded]))
     assert watch.check({**CONFIG, "level": "all"}, {})[0] == ""  # a replaced watch is not news
 
     http.set_transport_for_tests(_serve([_feature("w1", "Tornado Watch", sig="A", etn="0101", instruction="")]))
     _, state = watch.check(CONFIG, {})
     http.set_transport_for_tests(_serve([_feature("w2", "Tornado Watch", sig="A", etn="0101", vtec_action="CAN",
-                                                  instruction="")]))
+                                                  msg="Cancel", refs=["w1"], instruction="")]))
     message, state = watch.check(CONFIG, state)
-    assert message == "✅ Tornado Watch for Des Moines, IA was cancelled." and state["sent"] == {}
+    assert message == ""
+    message, state = watch.check(CONFIG, state)
+    assert message == "✅ Tornado Watch for Des Moines, IA has ended or expired." and state["sent"] == {}
+
+
+def test_an_expiry_notice_ends_the_alert_right_away():
+    """EXP notices are "Update"/"Alert" messages in the live feed, so they do come through."""
+    http.set_transport_for_tests(_serve([_feature("w1", "Winter Storm Warning", phen="WS", etn="0004")]))
+    _, state = watch.check(CONFIG, {})
+    http.set_transport_for_tests(_serve([_feature("w2", "Winter Storm Warning", phen="WS", etn="0004",
+                                                  vtec_action="EXP", msg="Update", refs=["w1"])]))
+    message, state = watch.check(CONFIG, state)
+    assert message == "✅ Winter Storm Warning for Des Moines, IA has expired." and state["sent"] == {}
+
+
+def test_a_watch_upgraded_to_a_warning_is_not_an_all_clear():
+    """KMQT, 2026-11-18: a Gale Watch upgraded to a Gale Warning. The UPG notice is a "Cancel" (dropped) and the new
+    warning doesn't reference the watch, so the watch just vanished: "✅ … has ended or expired" 4 min later."""
+    config = {**CONFIG, "name": "Marquette, MI", "timezone": "America/Detroit"}
+    http.set_transport_for_tests(_serve([_feature("g1", "Gale Watch", phen="GL", sig="A", etn="0031",
+                                                  instruction="")]))
+    _, state = watch.check(config, {})
+    upgrade = [_feature("g2", "Gale Warning", phen="GL", sig="W", etn="0045", instruction=""),
+               _feature("g3", "Gale Watch", vtec_action="UPG", phen="GL", sig="A", etn="0031", msg="Cancel",
+                        instruction="")]
+    http.set_transport_for_tests(_serve(upgrade))
+    message, state = watch.check(config, state)
+    assert message.startswith("⚠️ GALE WARNING — Marquette, MI") and "✅" not in message
+    message, state = watch.check(config, state)
+    assert message == "⬆️ Gale Watch for Marquette, MI was upgraded to Gale Warning."
+    assert list(state["sent"]) == ["KDMX.GL.W.0045"]
+
+
+def test_an_upgrade_up_a_ladder_and_not_an_old_warning():
+    http.set_transport_for_tests(_serve([_feature("t1", "Tropical Storm Warning", phen="TR", etn="1001",
+                                                  instruction=""),
+                                         _feature("s1", "Winter Storm Watch", phen="WS", sig="A", etn="0009",
+                                                  instruction=""),
+                                         _feature("s2", "Winter Storm Warning", phen="WS", etn="0008",
+                                                  instruction="")]))
+    _, state = watch.check(CONFIG, {})
+    state["sent"]["KDMX.WS.W.0008"]["at"] -= 6 * 3600   # a warning for the storm before, up for hours
+    http.set_transport_for_tests(_serve([_feature("h1", "Hurricane Warning", phen="HU", etn="1001", instruction=""),
+                                         _feature("s2", "Winter Storm Warning", phen="WS", etn="0008",
+                                                  instruction="")]))
+    _, state = watch.check(CONFIG, state)
+    message, state = watch.check(CONFIG, state)
+    assert message.split("\n\n") == ["⬆️ Tropical Storm Warning for Des Moines, IA was upgraded to Hurricane Warning.",
+                                      "✅ Winter Storm Watch for Des Moines, IA has ended or expired."]
 
 
 def test_alert_without_vtec_keeps_its_key_through_updates():
@@ -150,6 +206,38 @@ def test_until_further_notice_has_no_made_up_end_time():
     http.set_transport_for_tests(_serve([flood]))
     message, _ = watch.check(CONFIG, {})
     assert message.splitlines()[0] == "⚠️ FLOOD WARNING — Des Moines, IA"
+
+
+def test_an_alert_that_hasnt_started_says_when_it_starts():
+    """Ojai, 2026-11-18: a Flood Watch starting overnight was pushed as "FLOOD WATCH — Ojai, CA, until …", which read
+    as in effect now. (The clock: 2:38 AM in Des Moines.)"""
+    watch_ = _feature("f1", "Flood Watch", phen="FA", sig="A", etn="0004", onset="2026-11-16T03:00:00-06:00",
+                      ends="2026-11-16T21:00:00-06:00", instruction="")
+    later = _feature("f2", "Winter Storm Warning", phen="WS", etn="0002", onset="2026-11-15T22:00:00-06:00",
+                     ends=None, instruction="")
+    now = _feature("f3", "Wind Advisory", phen="WI", sig="Y", etn="0007", onset="2026-11-15T02:41:00-06:00",
+                   ends="2026-11-15T09:00:00-06:00", instruction="")
+    http.set_transport_for_tests(_serve([watch_, later, now]))
+    firsts = [m.splitlines()[0] for m in watch.check({**CONFIG, "level": "all"}, {})[0].split("\n\n")]
+    assert sorted(firsts) == ["⚠️ FLOOD WATCH — Des Moines, IA, from tomorrow 3 AM to 9 PM",
+                              "⚠️ WIND ADVISORY — Des Moines, IA, until 9 AM",   # starts in 3 minutes: now
+                              "⚠️ WINTER STORM WARNING — Des Moines, IA, from 10 PM"]
+
+
+def test_push_text_is_not_hard_wrapped():
+    """Ojai, 2026-11-18: a push read "…possible Flood\\nWarnings…" (the NWS wraps its text at ~70 columns)."""
+    text = ("Monitor later forecasts and be alert for possible Flood\nWarnings. Those living in areas prone to\n"
+            "flooding should be prepared to take action should flooding\ndevelop. ") * 6
+    flood = _feature("f1", "Flood Watch", phen="FA", sig="A", etn="0004", instruction=text)
+    params = flood["properties"]["parameters"]
+    del params["tornadoDetection"]
+    params["NWSheadline"] = ["FLOOD WATCH IN EFFECT FROM LATE WEDNESDAY NIGHT\nTHROUGH THURSDAY AFTERNOON"]
+    http.set_transport_for_tests(_serve([flood]))
+    lines = watch.check(CONFIG, {})[0].splitlines()
+    assert lines[1] == "FLOOD WATCH IN EFFECT FROM LATE WEDNESDAY NIGHT THROUGH THURSDAY AFTERNOON"
+    assert lines[2].startswith("Monitor later forecasts and be alert for possible Flood Warnings. Those living")
+    assert lines[2].endswith("…") and len(lines[2]) <= watch.INSTRUCTION_CHARS + 1 and not lines[2].endswith(" …")
+    assert lines[3] == "— National Weather Service"
 
 
 def test_missing_settings_are_reported_once_a_day(tmp_path):
@@ -240,6 +328,18 @@ def test_snow_is_called_snow():
     assert watch.check(RAIN, {})[0] == "🌨️ Snow likely to start in Des Moines, IA within the hour."
 
 
+def test_zero_degrees_counts_as_freezing():
+    """0.0 °C read as "no reading": last night's 0.0 °C wasn't a freeze (a false "first freeze"), and 0.0 °C rain
+    wasn't snow."""
+    _at("2026-11-15T15:05")
+    temps = [2.0] * 60 + [0.0] * 6 + [6.0] * 6 + [1.0] * 9 + [-2.0] * 10 + [3.0] * 10
+    http.set_transport_for_tests(_serve_model(_model("2026-11-12T00:00", temps)))
+    assert watch.check(FREEZE, {})[0] == ""
+    _at("2026-12-20T13:20")
+    http.set_transport_for_tests(_serve_model(_model("2026-12-20T13:00", [0.0] * 4, chance=90, precip=0.6)))
+    assert watch.check(RAIN, {})[0] == "🌨️ Snow likely to start in Des Moines, IA within the hour."
+
+
 def test_no_first_freeze_claim_when_it_froze_last_night_even_without_history():
     _at("2026-11-15T15:05")
     # model rows start 3 days back: last night dropped to -4°C, tonight -2°C
@@ -247,3 +347,175 @@ def test_no_first_freeze_claim_when_it_froze_last_night_even_without_history():
     http.set_transport_for_tests(_serve_model(_model("2026-11-12T00:00", temps)))
     message, state = watch.check(FREEZE, {})
     assert message == "" and state["last_freeze_night"] == "2026-11-15"
+
+
+# --- pushes are the NWS's alerts: US only (the audit of 0.9.2) --------------------------------------
+
+def _setup(tmp_path, monkeypatch, place, points_status=200, points=None):
+    settings.set_data_dir(tmp_path / "data")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(places, "resolve", lambda _q: place)
+
+    def handler(request):
+        if request.url.path.startswith("/points/"):
+            return httpx.Response(points_status, json=points or {"status": points_status})
+        return httpx.Response(503)
+    http.set_transport_for_tests(httpx.MockTransport(handler))
+    args = argparse.Namespace(push_command="setup", place=["x"], level="watches", freeze=False, rain=False)
+    return commands._push_cli(args)
+
+
+def test_push_setup_refuses_a_place_abroad(tmp_path, monkeypatch, capsys):
+    """Berlin, 2026-11-18: setup took it, and every check after read the NWS's "out of bounds" as no alerts."""
+    berlin = Place("Berlin, Berlin, DE", 52.52, 13.405, "DE", timezone="Europe/Berlin")
+    assert _setup(tmp_path, monkeypatch, berlin) == 1
+    assert capsys.readouterr().out.startswith("Warning pushes are US-only")
+    assert not (tmp_path / "data" / watch.CONFIG_NAME).exists()
+    coords = Place("52.520, 13.405", 52.52, 13.405, kind="coords")   # no country: the NWS's grid decides
+    assert _setup(tmp_path, monkeypatch, coords, points_status=404) == 1
+    assert "US-only" in capsys.readouterr().out
+    nws_down = Place("43.650, -79.380", 43.65, -79.38, kind="coords")
+    assert _setup(tmp_path, monkeypatch, nws_down, points_status=503) == 1
+    assert "Try again in a few minutes" in capsys.readouterr().out
+    assert not (tmp_path / "data" / watch.CONFIG_NAME).exists()
+
+
+def test_push_setup_saves_the_places_own_zone(tmp_path, monkeypatch, capsys):
+    coords = Place("41.600, -93.610", 41.6, -93.61, kind="coords")
+    point = {"properties": {"timeZone": "America/Chicago", "gridId": "DMX"}}
+    assert _setup(tmp_path, monkeypatch, coords, points=point) == 0
+    assert capsys.readouterr().out.startswith("Watching 41.600, -93.610 (watches).")
+    assert watch._load(tmp_path / "data" / watch.CONFIG_NAME, {})["timezone"] == "America/Chicago"
+
+
+def test_a_home_abroad_says_pushes_are_us_only_once_a_day():
+    def handler(request):
+        return httpx.Response(400, json={"status": 400, "detail": "Parameter \"point\" is invalid: out of bounds"})
+    http.set_transport_for_tests(httpx.MockTransport(handler))
+    berlin = {**CONFIG, "name": "Berlin", "lat": 52.52, "lon": 13.405, "timezone": "Europe/Berlin", "level": "all"}
+    message, state = watch.check(berlin, {})
+    assert message.startswith("⚠️ Better Weather warning pushes are US-only, and Berlin is outside")
+    assert watch.check(berlin, state)[0] == "" and not state.get("failures")
+
+
+# --- one run at a time, each within a time budget (the audit of 0.9.2) -------------------------------
+
+def test_a_run_while_another_holds_the_lock_stays_quiet(tmp_path, monkeypatch):
+    watch._save(tmp_path / watch.CONFIG_NAME, CONFIG)
+    calls = []
+    monkeypatch.setattr(watch, "check", lambda *a, **k: calls.append(1) or ("🚨 x", {}))
+    (tmp_path / watch.LOCK_NAME).write_text("1234 0", encoding="utf-8")
+    assert watch.run(tmp_path) == "" and calls == []
+    assert not (tmp_path / watch.STATE_NAME).exists()          # and it never touched the state
+    assert (tmp_path / watch.LOCK_NAME).read_text(encoding="utf-8") == "1234 0"
+
+
+def test_a_stale_lock_is_taken_over_and_released(tmp_path, monkeypatch):
+    watch._save(tmp_path / watch.CONFIG_NAME, CONFIG)
+    monkeypatch.setattr(watch, "check", lambda config, state, **k: ("🚨 x", {**state, "sent": {}}))
+    lock = tmp_path / watch.LOCK_NAME
+    lock.write_text("1234 0", encoding="utf-8")
+    old = time.time() - watch.LOCK_STALE_S - 60
+    os.utime(lock, (old, old))
+    assert watch.run(tmp_path) == "🚨 x"
+    assert not lock.exists() and not list(tmp_path.glob("*.tmp")) and not list(tmp_path.glob(".*.tmp"))
+
+
+def test_the_lock_is_released_after_a_crash(tmp_path, monkeypatch):
+    watch._save(tmp_path / watch.CONFIG_NAME, CONFIG)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(watch, "check", boom)
+    assert "kaboom" in watch.run(tmp_path)
+    assert not (tmp_path / watch.LOCK_NAME).exists()
+
+
+def test_a_run_that_runs_out_of_time_gives_up_as_a_failed_check(tmp_path, monkeypatch):
+    watch._save(tmp_path / watch.CONFIG_NAME, CONFIG)
+    watch._save(tmp_path / watch.STATE_NAME, {"failures": watch.FAIL_NOTICE_AFTER - 2, "sent": {}})
+    release = threading.Event()
+    monkeypatch.setattr(watch, "RUN_BUDGET_S", 0.3)
+    monkeypatch.setattr(watch, "check", lambda *a, **k: release.wait(5) and ("never", {}))
+    try:
+        assert watch.run(tmp_path) == ""
+        assert watch.run(tmp_path).startswith("⚠️ Better Weather can't reach the NWS alert service.")
+    finally:
+        release.set()
+    assert watch._load(tmp_path / watch.STATE_NAME, {})["failures"] == watch.FAIL_NOTICE_AFTER
+    assert not (tmp_path / watch.LOCK_NAME).exists()
+
+
+def test_slow_extras_never_cost_a_warning(monkeypatch):
+    release = threading.Event()
+
+    def slow(config, state, *_a):
+        release.wait(5)
+        state["rain_at"] = 1.0
+        return ["☔ late"]
+
+    monkeypatch.setattr(watch, "_extras", slow)
+    monkeypatch.setattr(watch, "EXTRAS_MIN_S", 0.1)
+    http.set_transport_for_tests(_serve([_feature("a1", "Tornado Warning")]))
+    try:
+        message, state = watch.check({**CONFIG, "rain": True}, {}, deadline=time.monotonic() + 0.4)
+    finally:
+        release.set()
+    assert message.startswith("🚨 TORNADO WARNING") and "☔" not in message
+    assert state["sent"] and "rain_at" not in state
+
+
+# --- a saved place without a time zone (the audit of 0.9.2) -----------------------------------------
+
+def _no_zone_world(points_zone=None, model=None):
+    cache.use_memory_cache_for_tests()
+
+    def handler(request):
+        if "open-meteo" in str(request.url):
+            return httpx.Response(200, json=model) if model else httpx.Response(503)
+        if request.url.path.startswith("/points/"):
+            if points_zone:
+                return httpx.Response(200, json={"properties": {"timeZone": points_zone}})
+            return httpx.Response(503)
+        return httpx.Response(200, json={"features": [_feature("a1", "Tornado Warning")]})
+    return httpx.MockTransport(handler)
+
+
+def test_no_saved_zone_uses_the_places_own_never_utc():
+    """`timezone: None` in watch.json made every time UTC ("until 9:45 PM" for a 3:45 PM CST end)."""
+    config = {**CONFIG, "timezone": None}
+    http.set_transport_for_tests(_no_zone_world(points_zone="America/Chicago"))
+    assert watch.check(config, {})[0].startswith("🚨 TORNADO WARNING — Des Moines, IA, until 3:45 PM")
+    http.set_transport_for_tests(_no_zone_world())     # no lookup answers: the alert's own (local) offset
+    assert watch.check(config, {})[0].startswith("🚨 TORNADO WARNING — Des Moines, IA, until 3:45 PM")
+
+
+def test_no_saved_zone_keeps_the_rain_hours_local():
+    """5:30 PM in Des Moines is 23:30 UTC: past the 10 PM cutoff if the zone were UTC."""
+    _at("2026-10-20T17:30")
+    model = {**_model("2026-10-20T18:00", [12.0] * 4, chance=80, precip=1.5), "timezone": "America/Chicago",
+             "utc_offset_seconds": -5 * 3600}
+    http.set_transport_for_tests(_no_zone_world(model=model))
+    message = watch.check({**RAIN, "timezone": None}, {})[0]
+    assert message.endswith("☔ Rain likely to start in Des Moines, IA within the hour.")
+
+
+# --- the 0.9.3 review ------------------------------------------------------------------------------------------
+
+def test_a_killed_runs_lock_costs_one_check_not_five():
+    """Hermes stops a script with SIGTERM, which skips `finally`: the lock it leaves must go stale after one run."""
+    assert watch.RUN_BUDGET_S < watch.LOCK_STALE_S <= 2 * 60 + 30
+
+
+def test_setup_for_a_new_place_starts_fresh(tmp_path):
+    def setup(lat):
+        watch.write_setup(hermes_home=tmp_path / "home", data_dir=tmp_path / "data", core_dir=tmp_path / "core",
+                          place={"name": "X", "lat": lat, "lon": 2}, level="warnings", freeze=True, rain=False,
+                          units_="us", clock="12h")
+    setup(1)
+    watch._save(tmp_path / "data" / watch.STATE_NAME, {"sent": {"a": {"event": "Flood Watch"}}})
+    setup(1)   # the same place again (a new level, say): what's tracked stays
+    assert watch._load(tmp_path / "data" / watch.STATE_NAME, {})["sent"]
+    setup(3)   # somewhere else: the old place's alerts must not "end" under the new name
+    assert watch._load(tmp_path / "data" / watch.STATE_NAME, None) == {}

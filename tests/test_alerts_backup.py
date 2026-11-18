@@ -43,6 +43,14 @@ def nws_feature(ident, event, action="NEW", etn="0012", ph="TO", sig="W", vtec=T
                            "onset": iso(-0.5), "description": "...", "instruction": "", "parameters": params}}
 
 
+def in_window(request: httpx.Request, items):
+    """What the mesonet's by-point lookups really return: events that START on or after `sdate` and before `edate`
+    (exclusive, UTC dates)."""
+    sdate, edate = request.url.params.get("sdate"), request.url.params.get("edate")
+    assert sdate and edate, "the mesonet's by-point lookups need a window"
+    return [i for i in items if "issue" not in i or sdate <= i["issue"][:10] < edate]
+
+
 def serve(nws_features=None, spot=(), rows=(ELSEWHERE,), mesonet_up=True, log=None, polygons=None):
     """api.weather.gov answers `nws_features` (None = 503); the mesonet answers `spot` and `rows`, and its polygon
     lookup `polygons` (None = it fails)."""
@@ -52,14 +60,14 @@ def serve(nws_features=None, spot=(), rows=(ELSEWHERE,), mesonet_up=True, log=No
         if request.url.host == "mesonet.agron.iastate.edu" and request.url.path.endswith("sbw_by_point.py"):
             if polygons is None or not mesonet_up:
                 return httpx.Response(503)
-            return httpx.Response(200, json={"sbws": list(polygons)})
+            return httpx.Response(200, json={"sbws": in_window(request, polygons)})
         if request.url.host == "api.weather.gov":
             if nws_features is None:
                 return httpx.Response(503, text="<HTML>Error</HTML>")
             return httpx.Response(200, json={"features": list(nws_features)})
         if request.url.host == "mesonet.agron.iastate.edu" and mesonet_up:
             if request.url.path.endswith("vtec_events_bypoint.py"):
-                return httpx.Response(200, json={"events": list(spot)})
+                return httpx.Response(200, json={"events": in_window(request, spot)})
             return httpx.Response(200, json={"data": list(rows)})
         return httpx.Response(503)
     return httpx.MockTransport(handler)
@@ -271,3 +279,140 @@ def test_one_odd_event_doesnt_cost_the_others():
     spot = [{**ev("Wind Advisory", "WI", "Y", 9), "eventid": "x"}, ev("Winter Storm Warning", "WS", "W", 5)]
     http.set_transport_for_tests(serve(None, spot=spot, rows=[ELSEWHERE, row("WI", "Y", "x"), row("WS", "W", 5)]))
     assert [a["event"] for a in nws.normalize_alerts(nws.alerts_at(41.6, -93.61).data)] == ["Winter Storm Warning"]
+
+
+# ---------------------------------------------------------------- the audit of 0.9.2
+def test_an_alert_starting_after_the_next_utc_midnight_is_in_the_copy():
+    """Ojai, 2026-11-18: a Flood Watch and a Wind Advisory starting at 09Z and 11Z the next day were missing from the
+    copy (its window ended at the next UTC midnight) — a false "has ended" push, then a second "new" one."""
+    clock.freeze_for_tests(clock.now_utc().replace(hour=19, minute=30))      # 19:30Z: midnight is 4.5 hours away
+    spot = [ev("Flood Watch", "FA", "A", 4, wfo="LOX", issued_ago=-13.5, ends_in=27.5),
+            ev("Wind Advisory", "WI", "Y", 73, wfo="LOX", issued_ago=-15.5, ends_in=20.5)]
+    rows = [ELSEWHERE, row("FA", "A", 4, wfo="LOX", issued_ago=-13.5), row("WI", "Y", 73, wfo="LOX", issued_ago=-15.5)]
+    http.set_transport_for_tests(serve(None, spot=spot, rows=rows))
+    alerts = nws.normalize_alerts(nws.alerts_at(34.448, -119.243).data)
+    assert sorted(a["event"] for a in alerts) == ["Flood Watch", "Wind Advisory"]
+
+
+def test_the_window_reaches_past_the_latest_start_in_the_live_list():
+    log: list[str] = []
+    http.set_transport_for_tests(serve(None, rows=[ELSEWHERE, row("HU", "A", 9, issued_ago=-14 * 24)], log=log))
+    nws.alerts_at(41.6, -93.61)
+    asked = next(line for line in log if "bypoint" in line)
+    edate = asked.split("edate=")[1].split("&")[0]
+    assert edate > (clock.now_utc() + timedelta(days=14)).date().isoformat()
+
+
+def test_a_flood_advisory_needs_its_polygon_too():
+    """Homestead FL, 2026-11-18: the copy matched 4 flood advisories by county; the NWS (by polygon) listed 1."""
+    spot = [ev("Flood Advisory", "FA", "Y", n, wfo="MFL") for n in (206, 207, 208, 209)] + \
+        [ev("Flood Watch", "FA", "A", 3, wfo="MFL")]
+    rows = [ELSEWHERE, *(row("FA", "Y", n, wfo="MFL") for n in (206, 207, 208, 209)), row("FA", "A", 3, wfo="MFL")]
+    hit = {"wfo": "MFL", "phenomena": "FA", "significance": "Y", "eventid": 207, "issue": iso(-1),
+           "url": f"/vtec/?year={clock.now_utc().year}&wfo=KMFL&phenomena=FA&significance=Y&eventid=0207"}
+    http.set_transport_for_tests(serve(None, spot=spot, rows=rows, polygons=[hit]))
+    found = nws.normalize_alerts(nws.alerts_at(25.468, -80.477).data)
+    assert sorted((a["event"], a["id"]) for a in found) == [
+        ("Flood Advisory", f"iem:KMFL.FA.Y.0207.{clock.now_utc().year}"),
+        ("Flood Watch", f"iem:KMFL.FA.A.0003.{clock.now_utc().year}")]
+
+
+def serve_abroad(log, points=503, alerts=400, mesonet=True):
+    """api.weather.gov as it answers for Berlin: its alerts say "out of bounds" (or 503: down), its grid 404."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        log.append(f"{request.url.host}{request.url.path}")
+        if request.url.host == "api.weather.gov" and request.url.path.startswith("/points/"):
+            if points == 200:
+                return httpx.Response(200, json={"properties": {"gridId": "XXX", "timeZone": "UTC"}})
+            return httpx.Response(points, json={"title": "Data Unavailable For Requested Point", "status": points})
+        if request.url.host == "api.weather.gov":
+            return httpx.Response(alerts, json={"title": "Invalid Parameter", "status": alerts,
+                                                "detail": "Parameter \"point\" is invalid: out of bounds"})
+        if request.url.host == "mesonet.agron.iastate.edu" and mesonet:
+            if request.url.path.endswith("vtec_events_bypoint.py"):
+                return httpx.Response(200, json={"events": []})
+            if request.url.path.endswith("sbw_by_point.py"):
+                return httpx.Response(200, json={"sbws": []})
+            return httpx.Response(200, json={"data": [ELSEWHERE]})
+        return httpx.Response(503)
+    return httpx.MockTransport(handler)
+
+
+def test_out_of_bounds_is_not_covered_not_nws_down_and_never_the_copy():
+    """Berlin, 2026-11-18: the NWS's 400 "out of bounds" fell through to the copy, whose empty answer read as "no
+    alerts" (pushes for a home abroad silently never came)."""
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log))
+    with pytest.raises(nws.NotCovered):
+        nws.alerts_at(52.52, 13.405)
+    assert not any("mesonet" in line for line in log)
+    assert issubclass(nws.NotCovered, http.FetchError)    # every caller already treats it as "couldn't check"
+
+
+def test_with_the_nws_down_its_saved_grid_lookup_still_says_abroad():
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=404, alerts=503))
+    assert nws.point(43.65, -79.38) is None   # Toronto, looked up before: inside the copy's coarse area, not the grid
+    log.clear()
+    with pytest.raises(nws.NotCovered):
+        nws.alerts_at(43.65, -79.38)
+    assert not any("mesonet" in line or "/points/" in line for line in log), log
+
+
+def test_with_the_nws_hanging_the_copy_is_asked_without_a_second_wait():
+    """Review 2026-11-18: the grid lookup asked live after the alerts call failed cost a push run its whole budget
+    in an NWS hang, so the copy was never reached. Coverage is now decided from what's saved."""
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=503, alerts=503))
+    fetched = nws.alerts_at(41.6, -93.61)   # Des Moines, never looked up
+    assert iem.is_copy(fetched.data)
+    assert not any("/points/" in line for line in log), log
+
+
+def test_with_the_nws_all_down_the_copy_refuses_a_spot_abroad():
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=503, alerts=503))
+    with pytest.raises(nws.NotCovered):
+        nws.alerts_at(52.52, 13.405)
+    with pytest.raises(nws.NotCovered):
+        iem.alerts_at(52.52, 13.405)
+    assert not any("mesonet" in line for line in log)
+
+
+def test_a_spot_the_nws_covers_is_never_called_abroad_by_the_copys_rough_area():
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=200, alerts=503))   # its grid answers; alerts are down
+    assert nws.point(0.0, 0.0) is not None
+    with pytest.raises(http.FetchError) as caught:
+        nws.alerts_at(0.0, 0.0)   # (outside the copy's area: pretend the NWS covered it)
+    assert not isinstance(caught.value, nws.NotCovered) and "503" in str(caught.value)
+
+
+def test_the_copys_area_takes_in_every_part_of_the_us():
+    inside = [(41.6, -93.61), (64.838, -147.716), (71.3, -156.8), (52.9, 173.2), (21.3, -157.85), (18.4, -66.1),
+              (17.7, -64.8), (13.47, 144.75), (-14.3, -170.7), (24.55, -81.78), (26.0, -90.0), (20.0, -87.0),
+              (45.0, -130.0), (40.0, -66.0), (48.99, -97.0), (7.45, 151.85)]
+    outside = [(52.52, 13.405), (19.43, -99.13), (35.68, 139.69), (51.5, -0.12), (-33.87, 151.21), (0.0, 0.0),
+               (-13.83, -171.76)]
+    assert all(iem.in_nws_area(lat, lon) for lat, lon in inside)
+    assert not any(iem.in_nws_area(lat, lon) for lat, lon in outside)
+
+
+def test_the_alerts_card_never_says_no_alerts_for_coordinates_abroad():
+    log: list[str] = []
+    http.set_transport_for_tests(serve_abroad(log, points=503, alerts=503))
+    berlin = report.alerts(Place(name="52.520, 13.405", lat=52.52, lon=13.405, kind="coords"), None, "12h")
+    assert "✅" not in berlin["card"] and "outside the US" in berlin["card"]
+    toronto = report.alerts(Place(name="43.650, -79.380", lat=43.65, lon=-79.38, kind="coords"), None, "12h")
+    assert "✅" not in toronto["card"] and "may be outside the US" in toronto["card"]
+    assert "summary" not in toronto and "_exact" not in toronto
+
+
+def test_the_alerts_card_says_when_it_is_the_copy():
+    http.set_transport_for_tests(serve(None, spot=[ev("Winter Weather Advisory", "WW", "Y", 7)],
+                                       rows=[ELSEWHERE, row("WW", "Y", 7)]))
+    out = report.alerts(Place(name="Des Moines, IA", lat=41.6, lon=-93.61, country="US"), None, "12h")
+    assert report.COPY_NOTE in out["card"].splitlines()
+    http.set_transport_for_tests(serve(None))
+    quiet = report.alerts(Place(name="Des Moines, IA", lat=41.7, lon=-93.61, country="US"), None, "12h")
+    assert quiet["card"].splitlines() == ["✅ No active alerts for Des Moines, IA", report.COPY_NOTE]
