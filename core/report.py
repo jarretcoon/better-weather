@@ -9,7 +9,8 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import UTC, datetime, time, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
+from time import monotonic
 from typing import Any, TypeVar
 
 from . import astro, display, http, units
@@ -24,9 +25,17 @@ COPY_NOTE = "⚠️ The NWS didn't answer: alerts are from Iowa State's copy of 
 
 _pool: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
-FETCH_WAIT_S = 45.0
+# One deadline for all of an answer's fetches (they run side by side): a source that misses it becomes a note. Was
+# 45 s per source, waited for one after another: a hanging NWS held the now card up for 100 s.
+REPORT_WAIT_S = 40.0
 SEVERE_EVENTS = ("tornado", "severe thunderstorm", "flash flood", "extreme wind",
                  "special weather statement")
+# The now card names where its reading came from unless it's a station right next door with an hour-fresh report.
+NEXT_DOOR_KM = 5.0
+FRESH_OBS_MIN = 60
+ELEVATION_WAIT_S = 10.0  # how long the station search waits for the model's answer to learn the place's height
+STALE_WARN_S = 30 * 60  # a saved copy older than this is pointed out on the card itself
+FEED_WARN_MIN = 20  # likewise MeteoAlarm's list (copies of it answer for up to 30 min: sources/intl_alerts.py)
 
 
 def _executor() -> ThreadPoolExecutor:
@@ -38,16 +47,32 @@ def _executor() -> ThreadPoolExecutor:
     return _pool
 
 
+def _interactive(fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    with http.interactive():  # someone is waiting: fewer, shorter tries (http.py)
+        return fn(*args, **kwargs)
+
+
+class _Jobs:
+    """An answer's background fetches, all sharing one deadline (set when the answer starts)."""
+
+    def __init__(self) -> None:
+        self.deadline = monotonic() + REPORT_WAIT_S
+
+    def start(self, label: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> _Job:
+        return _Job(label, self.deadline, fn, *args, **kwargs)
+
+
 class _Job:
     """A background fetch whose failure becomes a note instead of an exception."""
 
-    def __init__(self, label: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+    def __init__(self, label: str, deadline: float, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         self.label = label
-        self.future: Future[Any] = _executor().submit(fn, *args, **kwargs)
+        self.deadline = deadline
+        self.future: Future[Any] = _executor().submit(_interactive, fn, *args, **kwargs)
 
     def result(self, notes: list[str]) -> Any:
         try:
-            return self.future.result(timeout=FETCH_WAIT_S)
+            return self.future.result(timeout=max(0.0, self.deadline - monotonic()))
         except http.FetchError as exc:
             notes.append(f"{self.label} unavailable ({exc})")
         except TimeoutError:
@@ -64,25 +89,32 @@ class _Fmt:
         self.tz = tz
         self.now = now_utc().astimezone(tz)
 
-    def at(self, value: Any) -> str | None:
+    def moment(self, value: Any) -> datetime | None:
+        """A time from a source (ISO text or datetime), in the place's zone when it came without one."""
         dt = value if isinstance(value, datetime) else units.parse_time(value)
+        if dt is not None and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=self.tz)
+        return dt
+
+    def at(self, value: Any) -> str | None:
+        dt = self.moment(value)
         if dt is None:
             return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=self.tz)
         return units.day_clock(dt.astimezone(self.tz), self.clock, self.now)
 
     def precip(self, mm: Any) -> str | None:
         v = units.num(mm)
-        if v is None or v < 0.05:  # nothing measurable: leave it out instead of "0.00 in"
+        shown = None if v is None else round(v / 25.4, 2) if self.units == "us" else round(v, 1)
+        if not shown or shown < 0:  # nothing measurable: leave it out instead of "0.00 in"
             return None
-        return f"{v / 25.4:.2f} in" if self.units == "us" else f"{v:.1f} mm"
+        return f"{shown:.2f} in" if self.units == "us" else f"{shown:.1f} mm"
 
     def snow(self, cm: Any) -> str | None:
         v = units.num(cm)
-        if v is None:
+        shown = None if v is None else round(v / 2.54 if self.units == "us" else v, 1)
+        if not shown or shown < 0:  # a trace: leave it out instead of "0.0 in"
             return None
-        return f"{v / 2.54:.1f} in" if self.units == "us" else f"{v:.1f} cm"
+        return f"{shown:.1f} in" if self.units == "us" else f"{shown:.1f} cm"
 
 
 def _place_tz(place: Place, point: dict[str, Any] | None, om: http.Fetched | None) -> tzinfo:
@@ -103,16 +135,51 @@ def _nws_lookup(place: Place, notes: list[str]) -> tuple[dict[str, Any] | None, 
     if not place.maybe_us:
         return None, True
     try:
-        return nws.point(place.lat, place.lon), True
+        with http.interactive():
+            return nws.point(place.lat, place.lon), True
     except http.FetchError as exc:
         notes.append(f"NWS lookup failed ({exc}); using Open-Meteo instead")
         return None, False
 
 
+def _ago(minutes: float) -> str:
+    """'12 min ago' up to two hours, then '3 hr ago'."""
+    m = max(1, round(minutes))
+    return f"{m} min ago" if m < 120 else f"{round(m / 60)} hr ago"
+
+
+def _observation(point: dict[str, Any], place: Place, om: Future[Any]) -> dict[str, Any] | None:
+    """The now card's station report, from a station that stands for the place (nws.latest_observation). The model's
+    answer, fetched alongside, gives the place's height; without it in ELEVATION_WAIT_S, distance alone decides."""
+    try:
+        elevation = units.num((om.result(timeout=ELEVATION_WAIT_S).data or {}).get("elevation"))
+    except Exception:  # the model's own job reports its failure
+        elevation = None
+    return nws.latest_observation(point, lat=place.lat, lon=place.lon, elevation_m=elevation)
+
+
+def _reading_from(obs: dict[str, Any]) -> str | None:
+    """'KDSM 12 min ago' for the card when the station isn't right next door or its report is over an hour old."""
+    km, age = obs.get("distance_km"), obs.get("age_min")
+    far = km is not None and km > NEXT_DOOR_KM
+    old = age is not None and age > FRESH_OBS_MIN
+    if not (far or old):
+        return None
+    return f"{obs.get('station')} {_ago(age)}" if age is not None else str(obs.get("station"))
+
+
+def _distance(km: Any, units_: str) -> str | None:
+    v = units.num(km)
+    if v is None:
+        return None
+    return f"{max(1, round(v * 0.621371))} mi" if units_ == "us" else f"{max(1, round(v))} km"
+
+
 def _stale_note(label: str, fetched: http.Fetched | None, notes: list[str]) -> None:
+    """Say when a saved copy stood in for a source that didn't answer; past STALE_WARN_S with ⚠️, so it's on the card."""
     if fetched is not None and fetched.stale:
-        notes.append(f"{label} could not be refreshed; showing a copy from "
-                     f"{round(fetched.age_seconds / 60)} min ago")
+        text = f"{label} could not be refreshed; showing a copy from {_ago(fetched.age_seconds / 60)}"
+        notes.append(f"⚠️ {text}" if fetched.age_seconds >= STALE_WARN_S else text)
 
 
 def _is_daytime(sun: tuple[str, str] | None, hour: int) -> bool:
@@ -184,10 +251,12 @@ def _nws_hours(fetched: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict
     return out
 
 
-def _nws_periods(fetched: http.Fetched | None, count: int, detailed_for: int) -> list[dict[str, Any]]:
+def _nws_periods(fetched: http.Fetched | None, fmt: _Fmt, count: int, detailed_for: int) -> list[dict[str, Any]]:
+    """The forecast's periods that haven't ended yet (a saved copy can be hours old: no "This Afternoon" at 9 PM)."""
     periods = (((fetched.data if fetched else None) or {}).get("properties") or {}).get("periods") or []
+    ahead = [p for p in periods if (end := units.parse_time(p.get("endTime"))) is None or end > fmt.now]
     out = []
-    for i, p in enumerate(periods[:count]):
+    for i, p in enumerate(ahead[:count]):
         start = units.parse_time(p.get("startTime"))
         entry = {
             "name": p.get("name"),
@@ -206,24 +275,24 @@ def _nws_periods(fetched: http.Fetched | None, count: int, detailed_for: int) ->
     return out
 
 
-def _om_index_after(om: http.Fetched | None, last_day: Any) -> int:
-    """Index of the first Open-Meteo day after the last NWS period (7 if unknown)."""
-    times = [str(t)[:10] for t in ((((om.data if om else None) or {}).get("daily")) or {}).get("time") or []]
-    return times.index(str(last_day)) + 1 if last_day and str(last_day) in times else 7
-
-
-def _om_days(om: http.Fetched | None, fmt: _Fmt, start: int, count: int) -> list[dict[str, Any]]:
+def _om_days(om: http.Fetched | None, fmt: _Fmt, days: int, after: date | None = None) -> list[dict[str, Any]]:
+    """Open-Meteo's days from the place's today for *days* days (only those after *after*, when given). A saved
+    copy can be from yesterday: its first day is then dropped rather than shown as today."""
     daily = (((om.data if om else None) or {}).get("daily")) or {}
     times = daily.get("time") or []
+    today = fmt.now.date()
+    last = today + timedelta(days=days - 1)
     out = []
-    for i in range(start, min(len(times), start + count)):
+    for i, stamp in enumerate(times):
+        day = units.parse_time(stamp)
+        if day is None or not today <= day.date() <= last or (after is not None and day.date() <= after):
+            continue
 
         def pick(key: str, index: int = i) -> Any:
             values = daily.get(key) or []
             return values[index] if index < len(values) else None
 
-        day = units.parse_time(times[i])
-        label = day.strftime("%a %b ") + str(day.day) if day else times[i]
+        label = day.strftime("%a %b ") + str(day.day)
         snow = units.num(pick("snowfall_sum"))
         entry = {
             "day": label,
@@ -242,14 +311,31 @@ def _om_days(om: http.Fetched | None, fmt: _Fmt, start: int, count: int) -> list
     return out
 
 
+def _mark_upcoming(item: dict[str, Any], fmt: _Fmt) -> None:
+    """Flag an alert that hasn't started yet, while its "starts" is still a raw time: the cards then say
+    "from tomorrow 3 AM to 8 AM" rather than "until tomorrow 8 AM", which reads as if it were on now."""
+    start = fmt.moment(item.get("starts"))
+    if start is not None and start > fmt.now:
+        item["upcoming"] = True
+
+
 def _compact_alerts(alerts: list[dict[str, Any]], fmt: _Fmt) -> list[dict[str, Any]]:
-    return [{
-        "event": a["event"],
-        "severity": a.get("severity"),
-        "until": fmt.at(a.get("ends")),
-        "headline": a.get("headline"),
-        "life_threatening": a.get("life_threatening") or None,
-    } for a in alerts]
+    """The now card's alerts (raw NWS times in, the place's own clock out)."""
+    out = []
+    for a in alerts:
+        item = {**a}
+        _mark_upcoming(item, fmt)
+        out.append(_brief_alert(item | {"starts": fmt.at(a.get("starts")), "until": fmt.at(a.get("ends"))}))
+    return out
+
+
+def _brief_alert(a: dict[str, Any]) -> dict[str, Any]:
+    """One alert as the now card lists it, its times already on the place's clock. "starts" only when it's ahead."""
+    entry: dict[str, Any] = {"event": a.get("event"), "severity": a.get("severity")}
+    if a.get("upcoming"):
+        entry |= {"upcoming": True, "starts": a.get("starts")}
+    return entry | {"until": a.get("until"), "headline": a.get("headline"),
+                    "life_threatening": a.get("life_threatening") or None}
 
 
 def _clean(d: dict[str, Any]) -> dict[str, Any]:
@@ -266,16 +352,17 @@ def _hpa_to_pa(value: Any) -> float | None:
 def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place.note else []
     sources: list[str] = []
+    jobs = _Jobs()
     point, nws_known = _nws_lookup(place, notes)
     metric = units_ == "metric"
 
-    om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
-    intl_job = _Job("Official alerts", _intl_alerts, place, clock) if not point and nws_known else None
+    om_job = jobs.start("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
+    intl_job = jobs.start("Official alerts", _intl_alerts, place, clock) if not point and nws_known else None
     obs_job = fc_job = al_job = None
     if point:
-        obs_job = _Job("NWS observation", nws.latest_observation, point)
-        fc_job = _Job("NWS forecast", nws.forecast, point, metric=metric)
-        al_job = _Job("NWS alerts", nws.alerts_at, place.lat, place.lon)
+        obs_job = jobs.start("NWS observation", _observation, point, place, om_job.future)
+        fc_job = jobs.start("NWS forecast", nws.forecast, point, metric=metric)
+        al_job = jobs.start("NWS alerts", nws.alerts_at, place.lat, place.lon)
 
     om = om_job.result(notes)
     obs = obs_job.result(notes) if obs_job else None
@@ -285,27 +372,36 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
 
     # Current conditions: a real station report if it's recent, else the model's estimate.
     current: dict[str, Any] = {}
+    reading_from: str | None = None  # the card's "· KDSM 12 min ago" / "· model estimate"
     om_current = ((om.data if om else None) or {}).get("current") or {}
     if obs and (obs.get("age_min") or 0) <= nws.MAX_OBS_AGE_MIN:
-        feels_c = obs.get("wind_chill_c") or obs.get("heat_index_c") or units.heat_or_chill_c(
-            obs.get("temp_c"), obs.get("rh"), obs.get("wind_kmh"))
+        feels_c = next((v for v in (obs.get("wind_chill_c"), obs.get("heat_index_c")) if v is not None), None)
+        if feels_c is None:
+            feels_c = units.heat_or_chill_c(obs.get("temp_c"), obs.get("rh"), obs.get("wind_kmh"))
+        wind = units.wind(obs.get("wind_dir"), obs.get("wind_kmh"), obs.get("gust_kmh"), units_)
+        if wind is None:  # some stations leave wind out of a report: the model's, rather than no wind at all
+            wind = units.wind(om_current.get("wind_direction_10m"), om_current.get("wind_speed_10m"),
+                              om_current.get("wind_gusts_10m"), units_)
         current = {
             "temp": units.temp(obs.get("temp_c"), units_),
             "feels_like": units.temp(feels_c, units_) if feels_c is not None else None,
             "sky": obs.get("text") or openmeteo.describe(om_current.get("weather_code")),
             "humidity_pct": round(obs["rh"]) if obs.get("rh") is not None else None,
             "dewpoint": units.temp(obs.get("dewpoint_c"), units_),
-            "wind": units.wind(obs.get("wind_dir"), obs.get("wind_kmh"), obs.get("gust_kmh"), units_),
+            "wind": wind,
             "pressure": units.pressure(obs.get("pressure_pa"), units_),
             "visibility": units.distance(obs.get("visibility_m"), units_),
             "observed": fmt.at(obs.get("observed_at")),
             "station": f"{obs.get('station')} ({obs.get('station_name')})",
+            "station_distance": _distance(obs.get("distance_km"), units_),
             "source": "NWS station report",
         }
+        reading_from = _reading_from(obs)
         sources.append(f"NWS observation {obs.get('station')}")
         if obs.get("stale_copy"):
             notes.append("Latest station report could not be refreshed; showing the last one received")
     elif om_current:
+        reading_from = "model estimate"
         current = {
             "temp": units.temp(om_current.get("temperature_2m"), units_),
             "feels_like": units.temp(om_current.get("apparent_temperature"), units_),
@@ -331,25 +427,26 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
             "station": obs.get("station"),
             "source": "NWS station report (old)",
         }
+        reading_from = _reading_from(obs)
         notes.append(f"Only an old station report is available ({obs.get('age_min')} min old)")
 
     next_hours = _om_hours(om, fmt, 8)  # for the card's "next hours" line only
 
-    periods = _nws_periods(fc, 3, detailed_for=2) if fc else []
+    periods = _nws_periods(fc, fmt, 3, detailed_for=2) if fc else []
     if periods:
         sources.append(f"NWS forecast ({(point or {}).get('gridId', 'NWS')})")
         _stale_note("NWS forecast", fc, notes)
     else:
-        periods = _om_days(om, fmt, 0, 2)
+        periods = _om_days(om, fmt, 2)
 
     if om is not None:
         sources.append("Open-Meteo")
         _stale_note("Open-Meteo", om, notes)
 
-    alerts: list[dict[str, Any]] = []
+    alerts: list[dict[str, Any]] = []  # as the card lists them: times on the place's clock
     alerts_checked = False
     if al is not None:
-        alerts = nws.normalize_alerts(al.data)
+        alerts = _compact_alerts(nws.normalize_alerts(al.data), fmt)
         alerts_checked = True
         sources.append(iem.SOURCE if iem.is_copy(al.data) else "NWS alerts")
         _stale_note("NWS alerts", al, notes)
@@ -362,9 +459,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         if intl is None:
             notes.append("⚠️ Official alerts could not be checked — don't assume there are none")
         else:
-            alerts = [{"event": a.get("event"), "severity": a.get("severity"), "ends": None,
-                       "headline": a.get("headline"), "life_threatening": a.get("life_threatening")}
-                      for a in intl.get("alerts") or []]
+            alerts = [_brief_alert(a | {"until": a.get("ends")}) for a in intl.get("alerts") or []]
             alerts_checked = bool(intl.get("_exact"))
             if intl.get("source"):
                 sources.append(str(intl["source"]))
@@ -372,8 +467,12 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
 
     daily = ((om.data if om else None) or {}).get("daily") or {}
     sun = {}
-    if daily.get("sunrise"):
-        sun = {"sunrise": fmt.at(daily["sunrise"][0]), "sunset": fmt.at((daily.get("sunset") or [None])[0])}
+    days_listed = [str(t)[:10] for t in daily.get("time") or []]
+    if daily.get("sunrise") and (today := fmt.now.date().isoformat()) in days_listed:  # a saved copy starts earlier
+        i = days_listed.index(today)
+        rises, sets = daily.get("sunrise") or [], daily.get("sunset") or []
+        sun = {"sunrise": fmt.at(rises[i] if i < len(rises) else None),
+               "sunset": fmt.at(sets[i] if i < len(sets) else None)}
     sky = _sky(place, fmt, daily)
 
     result = {
@@ -381,9 +480,10 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         "as_of": units.clock(fmt.now, fmt.clock),
         "current": _clean(current),
         "forecast": periods,
-        "alerts": _compact_alerts(alerts, fmt),
+        "alerts": alerts,
         "units": units_,
         "_next_hours": next_hours,
+        "_reading_from": reading_from,
         "_sun": sun,
         "_alerts_checked": alerts_checked,
         "_sky": sky,
@@ -471,12 +571,13 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
     sources: list[str] = []
     days = max(1, min(int(days or 7), 16))
     hours = max(1, min(int(hours or 24), 72))
+    jobs = _Jobs()
     point = _nws_point(place, notes)
     metric = units_ == "metric"
 
-    om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon,
-                  max(days, 4 if hourly else days))
-    nws_job = _Job("NWS forecast", nws.forecast, point, hourly=hourly, metric=metric) if point else None
+    om_job = jobs.start("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon,
+                        max(days, 4 if hourly else days))
+    nws_job = jobs.start("NWS forecast", nws.forecast, point, hourly=hourly, metric=metric) if point else None
     om = om_job.result(notes)
     nws_fc = nws_job.result(notes) if nws_job else None
     fmt = _Fmt(units_, clock, _place_tz(place, point, om))
@@ -494,19 +595,20 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
                 sources.append("Open-Meteo")
         result["hours"] = rows
     else:
-        periods = _nws_periods(nws_fc, min(days * 2, 14), detailed_for=14) if nws_fc else []
+        periods = _nws_periods(nws_fc, fmt, min(days * 2, 14), detailed_for=14) if nws_fc else []
         if periods:
             sources.append(f"NWS forecast ({(point or {}).get('gridId', 'NWS')})")
             _stale_note("NWS forecast", nws_fc, notes)
             result["periods"] = periods
             if days > 7:
-                first = _om_index_after(om, periods[-1].get("_date"))
-                extra = _om_days(om, fmt, first, days - first)
+                last = periods[-1].get("_date")  # Open-Meteo picks up the day after the NWS's last one
+                extra = _om_days(om, fmt, days, after=date.fromisoformat(last) if last
+                                 else fmt.now.date() + timedelta(days=6))
                 if extra:
                     result["extended_days"] = extra
                     sources.append("Open-Meteo (days 8+)")
         else:
-            result["days"] = _om_days(om, fmt, 0, days)
+            result["days"] = _om_days(om, fmt, days)
             if result["days"]:
                 sources.append("Open-Meteo")
     if om is not None:
@@ -590,6 +692,7 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
     if country == "CA":
         items = intl_alerts.canada(place.lat, place.lon)
         for a in items:
+            _mark_upcoming(a, fmt)
             for key in ("starts", "ends", "next_update_by"):
                 a[key] = fmt.at(a.get(key))
         out = {"where": place.name, "place": place.public(), "count": len(items), "alerts": [_clean(a) for a in items],
@@ -599,24 +702,29 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
             out["summary"] = f"No active Environment Canada alerts for {place.name}."
         return out
     if country in intl_alerts.EU_SLUGS:
-        town = place.name.split(",")[0].split("(")[0]
+        town = place.name.split(",")[0].split("(")[0].strip()
         eu = intl_alerts.europe(country, place.lat, place.lon, (town, place.district, place.region))
         for group in ("exact_matches", "region_name_matches", "orange_and_red_in_country"):
             for a in eu[group]:
+                _mark_upcoming(a, fmt)
                 a["starts"], a["ends"] = fmt.at(a.get("starts")), fmt.at(a.get("ends"))
         found = eu["exact_matches"] + eu["region_name_matches"]
-        big = eu["orange_and_red_in_country"]
+        big = eu["orange_and_red_in_country"]  # the first dozen: count them from the country's totals
+        counts = eu["country_counts"]
+        elsewhere = (counts.get("orange", 0) + counts.get("red", 0)
+                     - sum(1 for a in found if a.get("level") in ("orange", "red")))
         notes = []
+        if eu["age_min"] > FEED_WARN_MIN:  # the last copy answers while a new one downloads, or when it can't
+            notes.append(f"⚠️ MeteoAlarm's list is from {_ago(eu['age_min'])}; newer warnings may be missing")
         if eu["exact"]:  # every active warning had a map area, so "none here" is a real answer
             if not found:
                 notes.append(f"No active warning in {eu['country']} covers this exact spot.")
-            if big:
-                notes.append(f"{len(big)} orange/red warning(s) elsewhere in {eu['country']}.")
-        else:
-            notes.append(f"⚠️ MeteoAlarm lists {eu['country']}'s warnings by area name, not map, so only "
-                         "warnings naming this town or area are shown"
-                         + (f"; {len(big)} more orange/red elsewhere in the country (weather_alerts lists "
-                            "the areas)" if big else ""))
+            if elsewhere:
+                notes.append(f"{elsewhere} orange/red warning(s) elsewhere in {eu['country']}.")
+        else:  # the alerts card lists the other orange and red areas under this
+            here = town if any(ch.isalpha() for ch in town) else "this place"  # not "naming 52.520"
+            notes.append(f"⚠️ {eu['country']} lists warnings by area name: only ones naming {here} or its area "
+                         "are shown" + (f" ({elsewhere} orange/red elsewhere)" if elsewhere else ""))
         return {"where": place.name, "place": place.public(), "count": len(found),
                 "alerts": [_clean(a) for a in found],
                 "orange_and_red_in_country": [_clean(a) for a in big],
@@ -661,12 +769,13 @@ def _offset_of_first_alert(data: Any) -> tzinfo:
 
 def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     notes: list[str] = [place.note] if place.note else []
+    jobs = _Jobs()
     point, known = _nws_lookup(place, notes)
-    om_job = _Job("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
+    om_job = jobs.start("Open-Meteo forecast", openmeteo.forecast, place.lat, place.lon, 3)
     # SPC is its own service: with the NWS grid lookup down, still try it for a lower-48 spot
     in_spc_area = (bool(point) or not known) and radar.in_conus(place.lat, place.lon)
-    spc_job = _Job("SPC outlook", spc.risk_at, place.lat, place.lon) if in_spc_area else None
-    al_job = _Job("NWS alerts", nws.alerts_at, place.lat, place.lon) if point else None
+    spc_job = jobs.start("SPC outlook", spc.risk_at, place.lat, place.lon) if in_spc_area else None
+    al_job = jobs.start("NWS alerts", nws.alerts_at, place.lat, place.lon) if point else None
     om = om_job.result(notes)
     risk = spc_job.result(notes) if spc_job else None
     al = al_job.result(notes) if al_job else None
@@ -696,7 +805,7 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     elif point or not known:
         notes.append("⚠️ Watches and warnings could not be checked right now — don't assume there are none")
     else:
-        notes.append("⚠️ Official warnings weren't checked here; weather_alerts checks Canada and Europe")
+        notes.append("⚠️ Official warnings weren't checked here; ask for alerts to check Canada and Europe")
 
     hourly = ((om.data if om else None) or {}).get("hourly") or {}
     times = hourly.get("time") or []

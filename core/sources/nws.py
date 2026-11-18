@@ -93,23 +93,61 @@ def _value(props: dict[str, Any], key: str) -> float | None:
     return units.num(item)
 
 
-def latest_observation(point_props: dict[str, Any]) -> dict[str, Any] | None:
-    """Newest usable observation from the nearest stations (skips silent or stale stations)."""
+# A station only stands for a place this close and at about the same height: across the mountains (San Juan's
+# reading came from Ponce, 70 km away) or 800 m up the ridge (Ojai's from Rose Valley) the model's estimate for the
+# spot itself is closer to the truth.
+MAX_STATION_KM = 25
+MAX_STATION_RISE_M = 300
+OBS_TRIES = 3  # station reports fetched at most per answer
+
+
+def latest_observation(point_props: dict[str, Any], *, lat: float | None = None, lon: float | None = None,
+                       elevation_m: float | None = None) -> dict[str, Any] | None:
+    """Newest usable observation from the nearest stations (skips silent or stale stations).
+
+    Given the place (*lat*, *lon*, *elevation_m*), stations more than MAX_STATION_KM away or MAX_STATION_RISE_M
+    higher or lower are skipped too; None then tells the caller to use the model's estimate instead."""
+    import math
+
+    def km_to(station: dict[str, Any]) -> float | None:
+        s_lat, s_lon = units.num(station.get("lat")), units.num(station.get("lon"))
+        if lat is None or lon is None or s_lat is None or s_lon is None:
+            return None
+        p1, p2 = math.radians(lat), math.radians(s_lat)
+        a = (math.sin((p2 - p1) / 2) ** 2
+             + math.cos(p1) * math.cos(p2) * math.sin(math.radians(s_lon - lon) / 2) ** 2)
+        return 2 * 6371.0 * math.asin(min(1.0, math.sqrt(a)))
+
     now = now_utc()
     fallback: dict[str, Any] | None = None
-    for station in stations(point_props)[:3]:
+    tries = 0
+    for station in stations(point_props):
+        km = km_to(station)
+        if km is not None and km > MAX_STATION_KM:
+            continue
+        if tries >= OBS_TRIES:
+            break
+        tries += 1
         try:
             fetched = http.get_json(f"{BASE}/stations/{station['id']}/observations/latest",
                                     ttl=http.TTL_OBS, max_stale=6 * 3600, allow_404=True)
-        except http.FetchError:
-            continue
+        except http.FetchError as exc:
+            if exc.status is None:  # no answer at all (a hang, the network): the next station is on the same server
+                break
+            continue  # this station's error (some answer 500 when they have nothing)
         if not fetched.found:
             continue
         props = (fetched.data or {}).get("properties") or {}
+        height = _value(props, "elevation")
+        if elevation_m is not None and height is not None and abs(height - elevation_m) > MAX_STATION_RISE_M:
+            continue
         observed = units.parse_time(props.get("timestamp"))
+        sea_level = _value(props, "seaLevelPressure")
         obs = {
             "station": station["id"],
             "station_name": station.get("name"),
+            "distance_km": round(km, 1) if km is not None else None,
+            "elevation_m": height,
             "observed_at": observed,
             "age_min": units.minutes_ago(observed, now),
             "text": (props.get("textDescription") or "").strip() or None,
@@ -119,7 +157,7 @@ def latest_observation(point_props: dict[str, Any]) -> dict[str, Any] | None:
             "wind_dir": _value(props, "windDirection"),
             "wind_kmh": _value(props, "windSpeed"),
             "gust_kmh": _value(props, "windGust"),
-            "pressure_pa": _value(props, "seaLevelPressure") or _value(props, "barometricPressure"),
+            "pressure_pa": sea_level if sea_level is not None else _value(props, "barometricPressure"),
             "visibility_m": _value(props, "visibility"),
             "wind_chill_c": _value(props, "windChill"),
             "heat_index_c": _value(props, "heatIndex"),

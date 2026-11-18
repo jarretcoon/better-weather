@@ -57,8 +57,10 @@ def test_alerts_tool_explains_region_only_matching():
     place = places.Place("Nîmes, Occitanie, FR", 43.84, 4.36, country="FR", timezone="Europe/Paris")
     r = report.alerts(place, None, "12h")
     assert r["count"] == 0 and r["orange_and_red_in_country"][0]["regions"] == ["Gard"]
-    assert "naming this town or area" in r["notes"][0]
-    assert "✅" not in r["card"] and "⚠️" in r["card"]  # never "no alerts" when it can't tell
+    note = "⚠️ France lists warnings by area name: only ones naming Nîmes or its area are shown (1 orange/red elsewhere)"
+    assert r["notes"] == [note]
+    assert "✅" not in r["card"] and note in r["card"]  # never "no alerts" when it can't tell
+    assert r["card"].splitlines()[-1] == "🟠 Rain warning · Gard"  # and the card names the area
 
 
 def test_region_name_matches_count_when_the_country_has_no_map():
@@ -125,14 +127,14 @@ def test_a_big_feed_keeps_answering_while_a_new_copy_downloads(monkeypatch):
         calls.append(u)
         started.set()
         release.wait(5)
-        return {"warnings": []}
+        return time.time(), {"warnings": []}
 
     old = {"warnings": [{"alert": {"msgType": "Alert"}}]}
     monkeypatch.setattr(intl_alerts, "_download", slow)
-    intl_alerts._feeds[url] = (time.monotonic() - intl_alerts.FEED_FRESH - 5, old)
+    intl_alerts._feeds[url] = (time.time() - intl_alerts.FEED_FRESH - 5, old)
     t = time.monotonic()
-    assert intl_alerts._feed(url) is old and time.monotonic() - t < 0.5, "no waiting for the download"
-    assert intl_alerts._feed(url) is old and len(calls) <= 1, "one download at a time"
+    assert intl_alerts._feed(url)[1] is old and time.monotonic() - t < 0.5, "no waiting for the download"
+    assert intl_alerts._feed(url)[1] is old and len(calls) <= 1, "one download at a time"
     assert started.wait(2)
     release.set()
     for _ in range(100):
@@ -141,5 +143,5 @@ def test_a_big_feed_keeps_answering_while_a_new_copy_downloads(monkeypatch):
         time.sleep(0.01)
     assert intl_alerts._feeds[url][1] == {"warnings": []}
     # past FEED_KEEP the copy is too old to show: the visitor waits for a fresh one
-    intl_alerts._feeds[url] = (time.monotonic() - intl_alerts.FEED_KEEP - 5, old)
-    assert intl_alerts._feed(url) == {"warnings": []}
+    intl_alerts._feeds[url] = (time.time() - intl_alerts.FEED_KEEP - 5, old)
+    assert intl_alerts._feed(url)[1] == {"warnings": []}
