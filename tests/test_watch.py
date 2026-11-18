@@ -224,6 +224,22 @@ def test_an_alert_that_hasnt_started_says_when_it_starts():
                               "⚠️ WINTER STORM WARNING — Des Moines, IA, from 10 PM"]
 
 
+def test_push_text_is_not_hard_wrapped():
+    """Ojai, 2026-11-18: a push read "…possible Flood\\nWarnings…" (the NWS wraps its text at ~70 columns)."""
+    text = ("Monitor later forecasts and be alert for possible Flood\nWarnings. Those living in areas prone to\n"
+            "flooding should be prepared to take action should flooding\ndevelop. ") * 6
+    flood = _feature("f1", "Flood Watch", phen="FA", sig="A", etn="0004", instruction=text)
+    params = flood["properties"]["parameters"]
+    del params["tornadoDetection"]
+    params["NWSheadline"] = ["FLOOD WATCH IN EFFECT FROM LATE WEDNESDAY NIGHT\nTHROUGH THURSDAY AFTERNOON"]
+    http.set_transport_for_tests(_serve([flood]))
+    lines = watch.check(CONFIG, {})[0].splitlines()
+    assert lines[1] == "FLOOD WATCH IN EFFECT FROM LATE WEDNESDAY NIGHT THROUGH THURSDAY AFTERNOON"
+    assert lines[2].startswith("Monitor later forecasts and be alert for possible Flood Warnings. Those living")
+    assert lines[2].endswith("…") and len(lines[2]) <= watch.INSTRUCTION_CHARS + 1 and not lines[2].endswith(" …")
+    assert lines[3] == "— National Weather Service"
+
+
 def test_missing_settings_are_reported_once_a_day(tmp_path):
     first = watch.run(tmp_path)
     second = watch.run(tmp_path)

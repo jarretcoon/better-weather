@@ -172,13 +172,20 @@ def _format_new(alert: dict[str, Any], place: str, fmt_time: Any, now: datetime)
     if extra:
         lines.append(" · ".join(extra))
     if alert.get("headline"):
-        lines.append(str(alert["headline"]))
-    instruction = (alert.get("instruction") or "").strip()
+        lines.append(_flat(alert["headline"]))
+    instruction = _flat(alert.get("instruction") or "", INSTRUCTION_CHARS)
     if instruction:
-        cut = instruction[:INSTRUCTION_CHARS]
-        lines.append(cut + ("…" if len(instruction) > INSTRUCTION_CHARS else ""))
+        lines.append(instruction)
     lines.append("— National Weather Service")
     return "\n".join(lines)
+
+
+def _flat(text: Any, limit: int | None = None) -> str:
+    """NWS text comes hard-wrapped at ~70 columns ("…possible Flood\nWarnings…"): join it, cut at a word."""
+    flat = " ".join(str(text).split())
+    if limit is None or len(flat) <= limit:
+        return flat
+    return flat[:limit].rsplit(" ", 1)[0] + "…"
 
 
 # VTEC actions that mean the event is over or has been replaced by another one. (The NWS's feed sends CAN and UPG as
