@@ -187,6 +187,18 @@ def test_an_alert_starting_later_reads_from_and_to(home):
     assert "upcoming" not in fog and "starts" not in fog
 
 
+def test_the_us_alerts_card_says_when_a_later_alert_starts(home):
+    from better_weather.core import places, report
+
+    serve({DSM_ALERTS: {"features": [
+        _nws_alert("Wind Advisory", "2026-11-16T03:00:00-06:00", "2026-11-16T08:00:00-06:00"),
+        _nws_alert("Dense Fog Advisory", "2026-11-15T01:00:00-06:00", "2026-11-15T09:00:00-06:00", "a2")]}})
+    r = report.alerts(places.resolve("Des Moines, IA"), None, "12h")
+    assert "⚠️ **Wind Advisory** from tomorrow 3 AM to 8 AM" in r["card"]
+    assert "⚠️ **Dense Fog Advisory** until 9 AM" in r["card"]
+    assert [a.get("upcoming") for a in r["alerts"]] == [True, None]
+
+
 def test_when_wording():
     from better_weather.core import display
 

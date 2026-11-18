@@ -1,7 +1,7 @@
 ---
 name: weather
 description: How to answer weather questions with Better Weather — which tool to use, how to send its chat cards and radar/satellite pictures, how to talk about alerts safely, and how to set up warning pushes.
-version: 0.5.0
+version: 0.9.3
 metadata:
   hermes:
     tags: [weather, forecast, alerts, severe-weather, radar, satellite]
@@ -59,7 +59,8 @@ paragraphs or a table, and don't repeat what it says.
 ## Honesty
 - 3+ days out, `weather_confidence` keeps you honest: "about 60% of model runs show rain", ranges
   when confidence is low.
-- US history is NOAA station records; elsewhere it's the ERA5 reanalysis, so say "about".
+- US history is NOAA station records; elsewhere it's modelled (the ERA5 reanalysis, and Open-Meteo's
+  forecast models for the last few days), so say "about".
 - The scorecard needs about two weeks of data before it names a winner.
 - Mention a stale or backup source in a few words when a note says so. Keep the units returned.
 

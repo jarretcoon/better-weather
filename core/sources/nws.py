@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from typing import Any
@@ -107,7 +108,6 @@ def latest_observation(point_props: dict[str, Any], *, lat: float | None = None,
 
     Given the place (*lat*, *lon*, *elevation_m*), stations more than MAX_STATION_KM away or MAX_STATION_RISE_M
     higher or lower are skipped too; None then tells the caller to use the model's estimate instead."""
-    import math
 
     def km_to(station: dict[str, Any]) -> float | None:
         s_lat, s_lon = units.num(station.get("lat")), units.num(station.get("lon"))

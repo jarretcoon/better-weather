@@ -148,7 +148,8 @@ agent where home is.
   kept 24 hours.
 - If a live request fails, a recent cached copy is used and the answer says how old it is. Alerts
   are only ever reused for 10 minutes; past that the answer says alerts couldn't be checked.
-- NWS forecast down → Open-Meteo. Station report missing or stale → model estimate, labelled.
+- NWS forecast down → Open-Meteo. Station report missing, stale, or from a station too far away or too much
+  higher or lower than the place → model estimate, labelled; a station that isn't right at the place is named.
 - NWS alert *updates* are kept (an ongoing warning is re-issued as an update; dropping those loses
   warnings that are still in effect).
 

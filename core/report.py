@@ -652,6 +652,7 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
     for item in items:
         # statewide lists span time zones: show each alert in its own office's offset
         f = _Fmt("us", clock, _own_zone(item)) if area else fmt
+        _mark_upcoming(item, f)
         item["starts"] = f.at(item.get("starts"))
         item["ends"] = f.at(item.get("ends"))  # None = no set end ("until further notice")
         item["next_update_by"] = f.at(item.pop("expires", None))
