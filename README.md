@@ -106,7 +106,8 @@ It keys each alert on the NWS event id, so routine updates stay quiet. The NWS's
 cancellation and upgrade notices, so an alert must be missing from two checks in a row (about 4
 minutes) before it is called ended; one replaced by a stronger alert from the same office (a watch
 by its warning, a gale warning by a storm warning) is called upgraded, not ended. An expiry notice
-ends an alert right away. The freeze heads-up comes at 3 PM, only for the first freezing night after a milder stretch (not
+ends an alert right away. An alert that starts later says so ("from tomorrow 3 AM to 9 PM").
+The freeze heads-up comes at 3 PM, only for the first freezing night after a milder stretch (not
 every night of winter). The rain/snow heads-up comes only when it's dry now and rain or snow is
 likely within the hour, between 7 AM and 10 PM, at most every 3 hours. If the alert service is
 unreachable for about 20 minutes it tells you once, and again

@@ -21,7 +21,7 @@ import logging
 import os
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +37,7 @@ SCRIPT_NAME = "better-weather-alerts.py"
 LEVELS = ("warnings", "watches", "all")
 FAIL_NOTICE_AFTER = 10          # consecutive failed checks (~20 min at every 2m) before saying so
 INSTRUCTION_CHARS = 450
+STARTS_LATER = timedelta(minutes=5)   # an alert starting later than this says "from … to …", not "until …"
 _VTEC = re.compile(r"/[OTEX]\.([A-Z]{3})\.([A-Z]{4})\.([A-Z]{2})\.([A-Z])\.(\d{4})\.")
 
 
@@ -83,10 +84,16 @@ def _push_ended(event: str) -> bool:
 
 # --- the check ------------------------------------------------------------------------------------
 
-def _format_new(alert: dict[str, Any], place: str, fmt_time: Any) -> str:
+def _format_new(alert: dict[str, Any], place: str, fmt_time: Any, now: datetime) -> str:
     mark = "🚨" if alert.get("life_threatening") else "⚠️"
     until = fmt_time(alert.get("ends"))
-    lines = [f"{mark} {alert['event'].upper()} — {place}" + (f", until {until}" if until else "")]
+    starts = units.parse_time(alert.get("starts"))
+    if starts is not None and starts.tzinfo is not None and starts > now + STARTS_LATER:   # a watch for tomorrow
+        to = fmt_time(alert.get("ends"), alert.get("starts"))
+        when = f", from {fmt_time(alert.get('starts'))}" + (f" to {to}" if to else "")
+    else:
+        when = f", until {until}" if until else ""
+    lines = [f"{mark} {alert['event'].upper()} — {place}{when}"]
     details = alert.get("details") or {}
     extra = []
     if details.get("tornadoDetection"):
@@ -163,9 +170,14 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
     tz = units.zone(config.get("timezone"))
     now = now_utc().astimezone(tz)
 
-    def fmt_time(value: Any) -> str | None:
-        dt = units.parse_time(value)
-        return units.day_clock(dt.astimezone(tz), config.get("clock") or "12h", now) if dt else None
+    def fmt_time(value: Any, after: Any = None) -> str | None:
+        """'3 PM', 'tomorrow 3 PM', 'Wed 3 PM'; just '9 PM' on the day of `after` ('from tomorrow 3 AM to 9 PM')."""
+        dt, first = units.parse_time(value), units.parse_time(after)
+        if dt is None:
+            return None
+        if first is not None and first.tzinfo is not None and first.astimezone(tz).date() == dt.astimezone(tz).date():
+            return units.clock(dt.astimezone(tz), config.get("clock") or "12h")
+        return units.day_clock(dt.astimezone(tz), config.get("clock") or "12h", now)
 
     messages: list[str] = []
     state = copy.deepcopy(state)  # never mutate the caller's copy (it is what gets saved on a crash)
@@ -218,7 +230,7 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
         previous = sent.get(key)
         if previous is None:
             source = "\n(From Iowa State's copy of NWS warnings: the NWS didn't answer.)" if via_copy else ""
-            messages.append(_format_new(alert, place, fmt_time) + source)
+            messages.append(_format_new(alert, place, fmt_time, now) + source)
             sent[key] = {"event": alert["event"], "ends": alert.get("ends"), "id": alert["id"],
                          "at": time.time(), "missed": 0}
             continue

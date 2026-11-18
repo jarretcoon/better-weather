@@ -10,12 +10,12 @@ CONFIG = {"name": "Des Moines, IA", "lat": 41.6, "lon": -93.61, "timezone": "Ame
 
 
 def _feature(ident, event, vtec_action="NEW", etn="0012", phen="TO", sig="W", ends="2026-11-15T15:45:00-06:00",
-             msg="Alert", refs=(), instruction="TAKE COVER NOW!", vtec=True):
+             msg="Alert", refs=(), instruction="TAKE COVER NOW!", vtec=True, onset="2026-11-15T02:30:00-06:00"):
     feature = {"properties": {
         "id": ident, "event": event, "severity": "Extreme" if "Tornado Warning" in event else "Moderate",
         "status": "Actual", "messageType": msg, "references": [{"identifier": r} for r in refs],
         "headline": f"{event} issued", "description": "...", "instruction": instruction, "ends": ends,
-        "onset": "2026-11-15T15:00:00-06:00",
+        "onset": onset,
         "parameters": {"VTEC": [f"/O.{vtec_action}.KDMX.{phen}.{sig}.{etn}.261115T2100Z-261115T2145Z/"],
                        "tornadoDetection": ["RADAR INDICATED"]},
     }}
@@ -203,6 +203,22 @@ def test_until_further_notice_has_no_made_up_end_time():
     http.set_transport_for_tests(_serve([flood]))
     message, _ = watch.check(CONFIG, {})
     assert message.splitlines()[0] == "⚠️ FLOOD WARNING — Des Moines, IA"
+
+
+def test_an_alert_that_hasnt_started_says_when_it_starts():
+    """Ojai, 2026-11-18: a Flood Watch starting overnight was pushed as "FLOOD WATCH — Ojai, CA, until …", which read
+    as in effect now. (The clock: 2:38 AM in Des Moines.)"""
+    watch_ = _feature("f1", "Flood Watch", phen="FA", sig="A", etn="0004", onset="2026-11-16T03:00:00-06:00",
+                      ends="2026-11-16T21:00:00-06:00", instruction="")
+    later = _feature("f2", "Winter Storm Warning", phen="WS", etn="0002", onset="2026-11-15T22:00:00-06:00",
+                     ends=None, instruction="")
+    now = _feature("f3", "Wind Advisory", phen="WI", sig="Y", etn="0007", onset="2026-11-15T02:41:00-06:00",
+                   ends="2026-11-15T09:00:00-06:00", instruction="")
+    http.set_transport_for_tests(_serve([watch_, later, now]))
+    firsts = [m.splitlines()[0] for m in watch.check({**CONFIG, "level": "all"}, {})[0].split("\n\n")]
+    assert sorted(firsts) == ["⚠️ FLOOD WATCH — Des Moines, IA, from tomorrow 3 AM to 9 PM",
+                              "⚠️ WIND ADVISORY — Des Moines, IA, until 9 AM",   # starts in 3 minutes: now
+                              "⚠️ WINTER STORM WARNING — Des Moines, IA, from 10 PM"]
 
 
 def test_missing_settings_are_reported_once_a_day(tmp_path):
