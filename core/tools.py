@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import math
 import re
 from collections.abc import Callable
 from typing import Any
@@ -45,6 +46,28 @@ def safe(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Handler:
     return wrapper
 
 
+def _whole(args: dict[str, Any], name: str, default: int) -> int:
+    """A whole-number argument (7, "7", 7.0). Anything else is a plain mistake to point out, not a bug."""
+    value = args.get(name)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default
+    try:
+        number = math.nan if isinstance(value, bool) else float(value)
+    except (TypeError, ValueError):
+        number = math.nan
+    if not number.is_integer():
+        raise places.PlaceError(f"{name} must be a whole number, like 3.")
+    return int(number)
+
+
+def _flag(args: dict[str, Any], name: str) -> bool:
+    """A yes/no argument: the string "false" is False (Python's bool() would call it True)."""
+    value = args.get(name)
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1", "on"}
+    return bool(value)
+
+
 def _units(args: dict[str, Any]) -> str:
     value = str(args.get("units") or "").strip().lower()
     if value in {"us", "metric"}:
@@ -68,9 +91,9 @@ def weather(args: dict[str, Any]) -> dict[str, Any]:
 def weather_forecast(args: dict[str, Any]) -> dict[str, Any]:
     return report.forecast(
         _place(args), _units(args), settings.current().clock,
-        days=int(args.get("days") or 7),
-        hourly=bool(args.get("hourly")),
-        hours=int(args.get("hours") or 24),
+        days=_whole(args, "days", 7),
+        hourly=_flag(args, "hourly"),
+        hours=_whole(args, "hours", 24),
     )
 
 
@@ -126,14 +149,14 @@ def weather_places(args: dict[str, Any]) -> dict[str, Any]:
 
 @safe
 def weather_radar(args: dict[str, Any]) -> dict[str, Any]:
-    return visuals.radar(_place(args), view=str(args.get("view") or "local"), loop=bool(args.get("loop")),
+    return visuals.radar(_place(args), view=str(args.get("view") or "local"), loop=_flag(args, "loop"),
                          clock=settings.current().clock)
 
 
 @safe
 def weather_satellite(args: dict[str, Any]) -> dict[str, Any]:
     return visuals.satellite(_place(args), kind=str(args.get("kind") or "geocolor"),
-                             loop=bool(args.get("loop")), clock=settings.current().clock)
+                             loop=_flag(args, "loop"), clock=settings.current().clock)
 
 
 @safe
@@ -151,7 +174,7 @@ def weather_history(args: dict[str, Any]) -> dict[str, Any]:
 
 @safe
 def weather_confidence(args: dict[str, Any]) -> dict[str, Any]:
-    return insight.confidence(_place(args), _units(args), int(args.get("days") or 7))
+    return insight.confidence(_place(args), _units(args), _whole(args, "days", 7))
 
 
 @safe
@@ -162,13 +185,13 @@ def weather_discussion(args: dict[str, Any]) -> dict[str, Any]:
 @safe
 def weather_best_time(args: dict[str, Any]) -> dict[str, Any]:
     return insight.best_time(_place(args), args.get("activity"), _units(args), settings.current().clock,
-                             int(args.get("days") or 3))
+                             _whole(args, "days", 3))
 
 
 @safe
 def weather_scorecard(args: dict[str, Any]) -> dict[str, Any]:
-    home = places.resolve("home")
-    return scorecard.report(home, _units(args), int(args.get("days") or 30))
+    days = _whole(args, "days", 30)
+    return scorecard.report(places.resolve("home"), _units(args), days)
 
 
 @safe
@@ -197,9 +220,12 @@ def weather_water(args: dict[str, Any]) -> dict[str, Any]:
 def weather_science(args: dict[str, Any]) -> dict[str, Any]:
     from . import science  # numpy loads only when someone asks for storm science
 
-    return science.sounding(_place(args), _units(args), settings.current().clock,
-                            model=str(args.get("model") or "gfs"), hours_ahead=int(args.get("hours_ahead") or 0),
-                            at_peak=bool(args.get("at_peak")))
+    model = str(args.get("model") or "gfs").strip().lower()
+    if model not in science.MODELS:
+        raise places.PlaceError("model must be 'gfs' or 'hrrr'.")
+    hours_ahead = _whole(args, "hours_ahead", 0)
+    return science.sounding(_place(args), _units(args), settings.current().clock, model=model,
+                            hours_ahead=hours_ahead, at_peak=_flag(args, "at_peak"))
 
 
 TOOLS: tuple[tuple[str, Handler], ...] = (
