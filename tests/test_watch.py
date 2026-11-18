@@ -1,7 +1,9 @@
+import argparse
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from better_weather.core import cache, clock, http, watch
+from better_weather.core import cache, clock, commands, http, places, settings, watch
+from better_weather.core.places import Place
 
 CONFIG = {"name": "Des Moines, IA", "lat": 41.6, "lon": -93.61, "timezone": "America/Chicago",
           "level": "watches", "clock": "12h"}
@@ -247,3 +249,52 @@ def test_no_first_freeze_claim_when_it_froze_last_night_even_without_history():
     http.set_transport_for_tests(_serve_model(_model("2026-11-12T00:00", temps)))
     message, state = watch.check(FREEZE, {})
     assert message == "" and state["last_freeze_night"] == "2026-11-15"
+
+
+# --- pushes are the NWS's alerts: US only (the audit of 0.9.2) --------------------------------------
+
+def _setup(tmp_path, monkeypatch, place, points_status=200, points=None):
+    settings.set_data_dir(tmp_path / "data")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(places, "resolve", lambda _q: place)
+
+    def handler(request):
+        if request.url.path.startswith("/points/"):
+            return httpx.Response(points_status, json=points or {"status": points_status})
+        return httpx.Response(503)
+    http.set_transport_for_tests(httpx.MockTransport(handler))
+    args = argparse.Namespace(push_command="setup", place=["x"], level="watches", freeze=False, rain=False)
+    return commands._push_cli(args)
+
+
+def test_push_setup_refuses_a_place_abroad(tmp_path, monkeypatch, capsys):
+    """Berlin, 2026-11-18: setup took it, and every check after read the NWS's "out of bounds" as no alerts."""
+    berlin = Place("Berlin, Berlin, DE", 52.52, 13.405, "DE", timezone="Europe/Berlin")
+    assert _setup(tmp_path, monkeypatch, berlin) == 1
+    assert capsys.readouterr().out.startswith("Warning pushes are US-only")
+    assert not (tmp_path / "data" / watch.CONFIG_NAME).exists()
+    coords = Place("52.520, 13.405", 52.52, 13.405, kind="coords")   # no country: the NWS's grid decides
+    assert _setup(tmp_path, monkeypatch, coords, points_status=404) == 1
+    assert "US-only" in capsys.readouterr().out
+    nws_down = Place("43.650, -79.380", 43.65, -79.38, kind="coords")
+    assert _setup(tmp_path, monkeypatch, nws_down, points_status=503) == 1
+    assert "Try again in a few minutes" in capsys.readouterr().out
+    assert not (tmp_path / "data" / watch.CONFIG_NAME).exists()
+
+
+def test_push_setup_saves_the_places_own_zone(tmp_path, monkeypatch, capsys):
+    coords = Place("41.600, -93.610", 41.6, -93.61, kind="coords")
+    point = {"properties": {"timeZone": "America/Chicago", "gridId": "DMX"}}
+    assert _setup(tmp_path, monkeypatch, coords, points=point) == 0
+    assert capsys.readouterr().out.startswith("Watching 41.600, -93.610 (watches).")
+    assert watch._load(tmp_path / "data" / watch.CONFIG_NAME, {})["timezone"] == "America/Chicago"
+
+
+def test_a_home_abroad_says_pushes_are_us_only_once_a_day():
+    def handler(request):
+        return httpx.Response(400, json={"status": 400, "detail": "Parameter \"point\" is invalid: out of bounds"})
+    http.set_transport_for_tests(httpx.MockTransport(handler))
+    berlin = {**CONFIG, "name": "Berlin", "lat": 52.52, "lon": 13.405, "timezone": "Europe/Berlin", "level": "all"}
+    message, state = watch.check(berlin, {})
+    assert message.startswith("⚠️ Better Weather warning pushes are US-only, and Berlin is outside")
+    assert watch.check(berlin, state)[0] == "" and not state.get("failures")

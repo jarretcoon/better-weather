@@ -91,7 +91,8 @@ refreshed every 10 minutes.
 
 A Hermes cron job in no-agent mode runs a tiny script every 2 minutes. It prints, and so messages
 you, only when something changes: a new warning or watch for your place, an extension, or the end
-of one. Quiet checks send nothing and use no model at all.
+of one. Quiet checks send nothing and use no model at all. The pushes are the NWS's alerts, so
+they're US-only: `push setup` refuses a place outside the NWS's area.
 
 ```bash
 hermes better-weather push setup                 # home, warnings + watches

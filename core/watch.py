@@ -134,6 +134,13 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
         fetched = nws.alerts_at(lat, lon, ttl=0)  # always ask the NWS fresh (else the mesonet's copy: iem.py)
         if fetched.stale:
             raise http.FetchError(fetched.url, "only a stale copy was available")
+    except nws.NotCovered:   # abroad (set up before push setup checked): say so once a day, never "no alerts"
+        if _rate_limited(state, "coverage_notice_at", 24):
+            messages.append(f"⚠️ Better Weather warning pushes are US-only, and {place} is outside the National "
+                            "Weather Service's area, so nothing will be pushed. Run: hermes better-weather push "
+                            "setup (with a US place), or remove the job: hermes cron remove better-weather-alerts")
+        state["sent"] = sent
+        return "\n\n".join(messages), state
     except http.FetchError as exc:
         failures = int(state.get("failures") or 0) + 1
         state["failures"] = failures
