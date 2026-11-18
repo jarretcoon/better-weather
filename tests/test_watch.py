@@ -1,4 +1,7 @@
 import argparse
+import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -365,3 +368,71 @@ def test_a_home_abroad_says_pushes_are_us_only_once_a_day():
     message, state = watch.check(berlin, {})
     assert message.startswith("⚠️ Better Weather warning pushes are US-only, and Berlin is outside")
     assert watch.check(berlin, state)[0] == "" and not state.get("failures")
+
+
+# --- one run at a time, each within a time budget (the audit of 0.9.2) -------------------------------
+
+def test_a_run_while_another_holds_the_lock_stays_quiet(tmp_path, monkeypatch):
+    watch._save(tmp_path / watch.CONFIG_NAME, CONFIG)
+    calls = []
+    monkeypatch.setattr(watch, "check", lambda *a, **k: calls.append(1) or ("🚨 x", {}))
+    (tmp_path / watch.LOCK_NAME).write_text("1234 0", encoding="utf-8")
+    assert watch.run(tmp_path) == "" and calls == []
+    assert not (tmp_path / watch.STATE_NAME).exists()          # and it never touched the state
+    assert (tmp_path / watch.LOCK_NAME).read_text(encoding="utf-8") == "1234 0"
+
+
+def test_a_stale_lock_is_taken_over_and_released(tmp_path, monkeypatch):
+    watch._save(tmp_path / watch.CONFIG_NAME, CONFIG)
+    monkeypatch.setattr(watch, "check", lambda config, state, **k: ("🚨 x", {**state, "sent": {}}))
+    lock = tmp_path / watch.LOCK_NAME
+    lock.write_text("1234 0", encoding="utf-8")
+    old = time.time() - watch.LOCK_STALE_S - 60
+    os.utime(lock, (old, old))
+    assert watch.run(tmp_path) == "🚨 x"
+    assert not lock.exists() and not list(tmp_path.glob("*.tmp")) and not list(tmp_path.glob(".*.tmp"))
+
+
+def test_the_lock_is_released_after_a_crash(tmp_path, monkeypatch):
+    watch._save(tmp_path / watch.CONFIG_NAME, CONFIG)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(watch, "check", boom)
+    assert "kaboom" in watch.run(tmp_path)
+    assert not (tmp_path / watch.LOCK_NAME).exists()
+
+
+def test_a_run_that_runs_out_of_time_gives_up_as_a_failed_check(tmp_path, monkeypatch):
+    watch._save(tmp_path / watch.CONFIG_NAME, CONFIG)
+    watch._save(tmp_path / watch.STATE_NAME, {"failures": watch.FAIL_NOTICE_AFTER - 2, "sent": {}})
+    release = threading.Event()
+    monkeypatch.setattr(watch, "RUN_BUDGET_S", 0.3)
+    monkeypatch.setattr(watch, "check", lambda *a, **k: release.wait(5) and ("never", {}))
+    try:
+        assert watch.run(tmp_path) == ""
+        assert watch.run(tmp_path).startswith("⚠️ Better Weather can't reach the NWS alert service.")
+    finally:
+        release.set()
+    assert watch._load(tmp_path / watch.STATE_NAME, {})["failures"] == watch.FAIL_NOTICE_AFTER
+    assert not (tmp_path / watch.LOCK_NAME).exists()
+
+
+def test_slow_extras_never_cost_a_warning(monkeypatch):
+    release = threading.Event()
+
+    def slow(config, state, *_a):
+        release.wait(5)
+        state["rain_at"] = 1.0
+        return ["☔ late"]
+
+    monkeypatch.setattr(watch, "_extras", slow)
+    monkeypatch.setattr(watch, "EXTRAS_MIN_S", 0.1)
+    http.set_transport_for_tests(_serve([_feature("a1", "Tornado Warning")]))
+    try:
+        message, state = watch.check({**CONFIG, "rain": True}, {}, deadline=time.monotonic() + 0.4)
+    finally:
+        release.set()
+    assert message.startswith("🚨 TORNADO WARNING") and "☔" not in message
+    assert state["sent"] and "rain_at" not in state

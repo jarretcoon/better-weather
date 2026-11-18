@@ -111,7 +111,8 @@ The freeze heads-up comes at 3 PM, only for the first freezing night after a mil
 every night of winter). The rain/snow heads-up comes only when it's dry now and rain or snow is
 likely within the hour, between 7 AM and 10 PM, at most every 3 hours. If the alert service is
 unreachable for about 20 minutes it tells you once, and again
-when it's back. Scheduled AI briefs are blueprints: `/blueprint better-weather:morning-brief`,
+when it's back. Runs never overlap, and a run that takes longer than 100 seconds gives up and counts
+as a failed check. Scheduled AI briefs are blueprints: `/blueprint better-weather:morning-brief`,
 `better-weather:week-ahead`, `better-weather:weekend-plan`.
 
 **Terminal:** `hermes better-weather now|forecast|hourly|alerts|severe|radar|satellite|air|history [place]`,

@@ -20,6 +20,8 @@ import json
 import logging
 import os
 import re
+import tempfile
+import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -38,6 +40,10 @@ LEVELS = ("warnings", "watches", "all")
 FAIL_NOTICE_AFTER = 10          # consecutive failed checks (~20 min at every 2m) before saying so
 INSTRUCTION_CHARS = 450
 STARTS_LATER = timedelta(minutes=5)   # an alert starting later than this says "from … to …", not "until …"
+LOCK_NAME = "watch.lock"
+LOCK_STALE_S = 10 * 60          # a lock this old was left by a run that died or hung: the next run takes it over
+RUN_BUDGET_S = 100              # a run gives up after this (the job runs every 2 minutes) and counts as a failed check
+EXTRAS_MIN_S = 10               # the freeze/rain heads-ups only start with this much of the budget left
 _VTEC = re.compile(r"/[OTEX]\.([A-Z]{3})\.([A-Z]{4})\.([A-Z]{2})\.([A-Z])\.(\d{4})\.")
 
 
@@ -51,9 +57,68 @@ def _load(path: Path, default: Any) -> Any:
 
 
 def _save(path: Path, data: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, indent=1, sort_keys=True))
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _lock(path: Path) -> str | None:
+    """Take the run lock (an O_EXCL file): a token to release it with, or None while another run holds it."""
+    token = f"{os.getpid()} {time.time()}"
+    for _ in range(3):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+            except FileNotFoundError:
+                continue   # released just now
+            if age < LOCK_STALE_S:
+                return None
+            path.unlink(missing_ok=True)   # left by a run that died or hung: take it over
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token)
+        return token
+    return None
+
+
+def _unlock(path: Path, token: str) -> None:
+    try:
+        if path.read_text(encoding="utf-8") == token:   # still ours (not taken over after a very long run)
+            path.unlink()
+    except OSError:
+        pass
+
+
+class _OutOfTime(Exception):
+    pass
+
+
+def _within(seconds: float, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """fn(*args, **kwargs), or _OutOfTime after `seconds` (the call is left to finish in a daemon thread, which
+    the cron script's exit ends: nothing it does after that is used)."""
+    box: dict[str, Any] = {}
+
+    def work() -> None:
+        try:
+            box["result"] = fn(*args, **kwargs)
+        except BaseException as exc:
+            box["error"] = exc
+
+    worker = threading.Thread(target=work, name="better-weather-push", daemon=True)
+    worker.start()
+    worker.join(max(0.0, seconds))
+    if worker.is_alive():
+        raise _OutOfTime
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
 
 
 # --- alert identity ---------------------------------------------------------------------------------
@@ -162,8 +227,19 @@ def _upgraded_to(key: str, entry: dict[str, Any], current: dict[str, dict[str, A
     return None
 
 
-def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """One pass. Returns (message or "", new state). Pure apart from the network fetches."""
+def _failed(state: dict[str, Any]) -> str | None:
+    """Count one failed check; the notice when the alert service has been out for about 20 minutes."""
+    state["failures"] = int(state.get("failures") or 0) + 1
+    if state["failures"] == FAIL_NOTICE_AFTER:
+        return ("⚠️ Better Weather can't reach the NWS alert service. Warnings won't be pushed until it's back; "
+                "check weather.gov if storms are near.")
+    return None
+
+
+def check(config: dict[str, Any], state: dict[str, Any], *,
+          deadline: float | None = None) -> tuple[str, dict[str, Any]]:
+    """One pass. Returns (message or "", new state). Pure apart from the network fetches. With a `deadline`
+    (time.monotonic()), the optional extras get only the time left before it: they never cost a warning."""
     place = str(config.get("name") or "home")
     lat, lon = float(config["lat"]), float(config["lon"])
     level = str(config.get("level")) if config.get("level") in LEVELS else "watches"
@@ -195,11 +271,10 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
         state["sent"] = sent
         return "\n\n".join(messages), state
     except http.FetchError as exc:
-        failures = int(state.get("failures") or 0) + 1
-        state["failures"] = failures
-        if failures == FAIL_NOTICE_AFTER:
-            messages.append(f"⚠️ Better Weather can't reach the NWS alert service ({exc}). "
-                            "Warnings won't be pushed until it's back; check weather.gov if storms are near.")
+        logger.info("better-weather: alert check failed: %s", exc)
+        notice = _failed(state)
+        if notice:
+            messages.append(notice)
         state["sent"] = sent
         return "\n\n".join(messages), state
 
@@ -267,8 +342,15 @@ def check(config: dict[str, Any], state: dict[str, Any]) -> tuple[str, dict[str,
             messages.append(f"✅ {entry['event']} for {place} {reason}.")
 
     state["sent"] = sent
-    try:  # the optional extras must never cost a warning
-        messages.extend(_extras(config, state, lat, lon, now))
+    try:  # the optional extras must never cost a warning, nor the time a run has for it
+        if deadline is None:
+            messages.extend(_extras(config, state, lat, lon, now))
+        elif deadline - time.monotonic() >= EXTRAS_MIN_S and (config.get("freeze") or config.get("rain")):
+            mine = copy.deepcopy(state)   # a slow forecast left running must not change the state being saved
+            messages.extend(_within(deadline - time.monotonic(), _extras, config, mine, lat, lon, now))
+            state = mine
+    except _OutOfTime:
+        logger.info("better-weather: freeze/rain extras ran out of time")
     except Exception:
         logger.warning("better-weather: freeze/rain extras failed", exc_info=True)
     return "\n\n".join(messages), state
@@ -374,7 +456,23 @@ def _rate_limited(state: dict[str, Any], key: str, hours: float) -> bool:
 
 
 def run(data_dir: Path) -> str:
-    """Entry point for the cron script. Prints nothing on a quiet tick; problems are reported rarely."""
+    """Entry point for the cron script. Prints nothing on a quiet tick; problems are reported rarely.
+
+    One run at a time (a lock file; a run that finds it held stays quiet), and each gives up after RUN_BUDGET_S:
+    a slow NWS can't pile runs up on the 2-minute schedule."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    lock = data_dir / LOCK_NAME
+    token = _lock(lock)
+    if token is None:
+        return ""   # the run before is still going: it says whatever there is to say
+    try:
+        return _run(data_dir)
+    finally:
+        _unlock(lock, token)
+
+
+def _run(data_dir: Path) -> str:
+    started = time.monotonic()
     state_path = data_dir / STATE_NAME
     state = _load(state_path, {})
     config = _load(data_dir / CONFIG_NAME, None)
@@ -388,8 +486,12 @@ def run(data_dir: Path) -> str:
     if config.get("paused"):
         return ""
     try:
-        message, state = check(config, state)
+        deadline = started + RUN_BUDGET_S
+        message, state = _within(deadline - time.monotonic(), check, config, state, deadline=deadline - 5)
         state["crashes"] = 0
+    except _OutOfTime:   # the NWS (and its copy) too slow to answer: a failed check, said like any other
+        logger.info("better-weather: alert check ran out of time")
+        message = _failed(state) or ""
     except Exception as exc:  # a bug must say so once, not every 2 minutes
         state["crashes"] = int(state.get("crashes") or 0) + 1
         message = ""
