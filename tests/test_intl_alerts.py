@@ -57,8 +57,10 @@ def test_alerts_tool_explains_region_only_matching():
     place = places.Place("Nîmes, Occitanie, FR", 43.84, 4.36, country="FR", timezone="Europe/Paris")
     r = report.alerts(place, None, "12h")
     assert r["count"] == 0 and r["orange_and_red_in_country"][0]["regions"] == ["Gard"]
-    assert "naming this town or area" in r["notes"][0]
-    assert "✅" not in r["card"] and "⚠️" in r["card"]  # never "no alerts" when it can't tell
+    note = "⚠️ France lists warnings by area name: only ones naming Nîmes or its area are shown (1 orange/red elsewhere)"
+    assert r["notes"] == [note]
+    assert "✅" not in r["card"] and note in r["card"]  # never "no alerts" when it can't tell
+    assert r["card"].splitlines()[-1] == "🟠 Rain warning · Gard"  # and the card names the area
 
 
 def test_region_name_matches_count_when_the_country_has_no_map():

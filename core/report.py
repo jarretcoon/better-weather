@@ -664,25 +664,27 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
             out["summary"] = f"No active Environment Canada alerts for {place.name}."
         return out
     if country in intl_alerts.EU_SLUGS:
-        town = place.name.split(",")[0].split("(")[0]
+        town = place.name.split(",")[0].split("(")[0].strip()
         eu = intl_alerts.europe(country, place.lat, place.lon, (town, place.district, place.region))
         for group in ("exact_matches", "region_name_matches", "orange_and_red_in_country"):
             for a in eu[group]:
                 _mark_upcoming(a, fmt)
                 a["starts"], a["ends"] = fmt.at(a.get("starts")), fmt.at(a.get("ends"))
         found = eu["exact_matches"] + eu["region_name_matches"]
-        big = eu["orange_and_red_in_country"]
+        big = eu["orange_and_red_in_country"]  # the first dozen: count them from the country's totals
+        counts = eu["country_counts"]
+        elsewhere = (counts.get("orange", 0) + counts.get("red", 0)
+                     - sum(1 for a in found if a.get("level") in ("orange", "red")))
         notes = []
         if eu["exact"]:  # every active warning had a map area, so "none here" is a real answer
             if not found:
                 notes.append(f"No active warning in {eu['country']} covers this exact spot.")
-            if big:
-                notes.append(f"{len(big)} orange/red warning(s) elsewhere in {eu['country']}.")
-        else:
-            notes.append(f"⚠️ MeteoAlarm lists {eu['country']}'s warnings by area name, not map, so only "
-                         "warnings naming this town or area are shown"
-                         + (f"; {len(big)} more orange/red elsewhere in the country (weather_alerts lists "
-                            "the areas)" if big else ""))
+            if elsewhere:
+                notes.append(f"{elsewhere} orange/red warning(s) elsewhere in {eu['country']}.")
+        else:  # the alerts card lists the other orange and red areas under this
+            here = town if any(ch.isalpha() for ch in town) else "this place"  # not "naming 52.520"
+            notes.append(f"⚠️ {eu['country']} lists warnings by area name: only ones naming {here} or its area "
+                         "are shown" + (f" ({elsewhere} orange/red elsewhere)" if elsewhere else ""))
         return {"where": place.name, "place": place.public(), "count": len(found),
                 "alerts": [_clean(a) for a in found],
                 "orange_and_red_in_country": [_clean(a) for a in big],
@@ -762,7 +764,7 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     elif point or not known:
         notes.append("⚠️ Watches and warnings could not be checked right now — don't assume there are none")
     else:
-        notes.append("⚠️ Official warnings weren't checked here; weather_alerts checks Canada and Europe")
+        notes.append("⚠️ Official warnings weren't checked here; ask for alerts to check Canada and Europe")
 
     hourly = ((om.data if om else None) or {}).get("hourly") or {}
     times = hourly.get("time") or []

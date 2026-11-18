@@ -21,6 +21,7 @@ from ..clock import now_utc
 ECCC = "https://api.weather.gc.ca/collections/weather-alerts/items"
 METEOALARM = "https://feeds.meteoalarm.org/api/v1/warnings/feeds-{slug}"
 TEXT_LIMIT = 2500
+REGIONS_KEPT = 8  # area names kept per warning; "more_regions" counts the rest
 # A country's MeteoAlarm feed is downloaded again after FEED_FRESH. Some are big (Germany's is ~8 MB: 6-20 s), so
 # until FEED_KEEP the last copy keeps answering while the new one downloads in the background: only the very first
 # visitor (a fresh process) waits for it.
@@ -193,10 +194,14 @@ def europe(country: str, lat: float, lon: float, names: Iterable[str | None] = (
             unmapped += 1
         descs = [str(a.get("areaDesc") or "") for a in areas]
         hits = [d for d in descs if wanted and _names_in(d, wanted)]
-        entry = {"event": info.get("event") or info.get("headline"), "level": colour,
+        event = str(info.get("event") or info.get("headline") or "Warning")
+        entry = {"event": event[:1].upper() + event[1:],  # DWD's are lower case: "gale-force gusts"
+                 "level": colour,
                  "severity": info.get("severity"), "ends": info.get("expires"), "starts": info.get("onset"),
                  "issued_by": info.get("senderName"),
-                 "regions": (hits + [d for d in descs if d not in hits])[:8]}
+                 "regions": (hits + [d for d in descs if d not in hits])[:REGIONS_KEPT]}
+        if len(descs) > REGIONS_KEPT:
+            entry["more_regions"] = len(descs) - REGIONS_KEPT
         text = str(info.get("description") or "").strip()
         full = {**entry, "headline": info.get("headline"), "description": text[:TEXT_LIMIT],
                 "instruction": str(info.get("instruction") or "").strip()}

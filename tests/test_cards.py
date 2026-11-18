@@ -225,3 +225,41 @@ def test_european_warnings_keep_their_end_and_say_when_they_start(home):
     assert "⚠️ **Heavy rain** from 4 PM to tomorrow 1 AM" in now["card"]
     card = report._intl_alerts(berlin, "12h")
     assert [a.get("upcoming") for a in card["alerts"]] == [None, True]
+
+
+# --- 4: no tool names on cards, and a short MeteoAlarm note whose areas the alerts card names -----------------
+
+def test_the_alerts_card_lists_orange_and_red_elsewhere_compactly(home):
+    from better_weather.core import places, report
+
+    many = [f"Kreis {n}" for n in "ABCDEFGHIJK"]  # 11 areas: MeteoAlarm keeps 8 names, counts the rest
+    _meteoalarm([_ma_warning("gale-force gusts", 3, ["Berlin"]),
+                 _ma_warning("heavy persistent rain", 4, many[:9]),
+                 _ma_warning("heavy persistent rain", 4, ["Kreis Calw", "Kreis A"]),
+                 _ma_warning("storm-force gusts", 3, ["Kreis Miesbach"]),
+                 _ma_warning("thunderstorms", 2, ["Kreis Z"])])  # yellow: not counted
+    berlin = places.Place("Berlin, State of Berlin, DE", 52.52, 13.41, country="DE", timezone="Europe/Berlin")
+    r = report.alerts(berlin, None, "12h")
+    assert r["card"].splitlines() == [
+        "**Alerts · Berlin, State of Berlin, DE**",
+        "⚠️ **Gale-force gusts** from 1 PM to tomorrow 1 AM",
+        "⚠️ Germany lists warnings by area name: only ones naming Berlin or its area are shown "
+        "(3 orange/red elsewhere)",
+        "🔴 Heavy persistent rain · Kreis A, Kreis B +8",
+        "🟠 Storm-force gusts · Kreis Miesbach",
+    ]
+    assert all(len(line) <= 110 for line in r["card"].splitlines())
+    now = report.now(berlin, "us", "12h")
+    assert "(3 orange/red elsewhere)" in now["card"] and "Kreis" not in now["card"]
+
+
+def test_no_tool_names_reach_a_person():
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "core"
+    for name in ("report.py", "display.py", "climate.py", "sources/intl_alerts.py"):
+        text = (root / name).read_text(encoding="utf-8")
+        quoted = re.findall(r'"[^"\n]*"', text)
+        leaks = [q for q in quoted if re.search(r"\bweather_(alerts|forecast|severe|places|air|history)\b", q)]
+        assert not leaks, (name, leaks)

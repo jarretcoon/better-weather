@@ -239,10 +239,12 @@ def alerts_card(r: dict[str, Any]) -> str:
     alerts = r.get("alerts") or []
     where = r.get("where") or (r.get("place") or {}).get("name") or "this place"
     warnings = [n for n in r.get("notes") or [] if n.startswith("⚠️")]
+    # a country that lists warnings by area name: its note says how many orange/red are elsewhere; name them
+    elsewhere = [] if r.get("_exact", True) else _elsewhere(r.get("orange_and_red_in_country") or [])
     if not alerts:
         if r.get("_exact", True):
             return "\n".join([f"✅ No active alerts for {where}", *warnings])
-        return "\n".join([f"**Alerts · {where}**", *(warnings or ["⚠️ Alerts weren't checked here"])])
+        return "\n".join([f"**Alerts · {where}**", *(warnings or ["⚠️ Alerts weren't checked here"]), *elsewhere])
     lines = [f"**Alerts · {where}**"]
     for a in alerts[:5]:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
@@ -254,7 +256,25 @@ def alerts_card(r: dict[str, Any]) -> str:
     if len(alerts) > 5:
         lines.append(f"…and {len(alerts) - 5} more")
     lines.extend(warnings)
+    lines.extend(elsewhere)
     return "\n".join(lines)
+
+
+def _elsewhere(warnings: list[dict[str, Any]], groups: int = 5) -> list[str]:
+    """Orange and red warnings elsewhere in the country, a line per kind: '🔴 Heavy rain · Kreis Calw, Enzkreis +6'."""
+    kinds: dict[tuple[str, str], tuple[list[str], int]] = {}
+    for w in warnings:
+        names, more = kinds.get((str(w.get("level")), str(w.get("event"))), ([], 0))
+        names.extend(n for n in w.get("regions") or [] if n and n not in names)
+        kinds[(str(w.get("level")), str(w.get("event")))] = (names, more + (w.get("more_regions") or 0))
+    lines = []
+    for (level, event), (names, more) in list(kinds.items())[:groups]:
+        rest = len(names) - 2 + more
+        where = ", ".join(names[:2]) + (f" +{rest}" if rest > 0 else "")
+        lines.append(f"{'🔴' if level == 'red' else '🟠'} {event}" + (f" · {where}" if where else ""))
+    if len(kinds) > groups:
+        lines.append(f"…and {len(kinds) - groups} more")
+    return lines
 
 
 def _flat(text: Any, limit: int) -> str:
