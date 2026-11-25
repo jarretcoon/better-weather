@@ -82,6 +82,7 @@ SEVERE: dict[str, Any] = {
         "Severe-storm risk: SPC outlook, watches and warnings. "
         "The Storm Prediction Center outlook at that exact spot for days 1-3 (Marginal..High), today's "
         "tornado/wind/hail odds, active watches and warnings, and model instability for 48 hours. "
+        "Other alerts in effect there (wind, flood, winter…) are named too; weather_alerts has their full text. "
         "Use for 'any storms coming', 'tornado risk', 'is it a severe weather day'."
     ),
     "parameters": {

@@ -853,8 +853,8 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
         notes.append("SPC severe outlooks cover the lower 48 US states only")
 
     if al is not None:
-        storm = [a for a in nws.normalize_alerts(al.data)
-                 if any(word in a["event"].lower() for word in SEVERE_EVENTS)]
+        everything = nws.normalize_alerts(al.data)
+        storm = [a for a in everything if _is_storm(a)]
         result["storm_alerts"] = []
         for a in storm:
             item = {"event": a["event"], "starts": a.get("starts")}
@@ -863,6 +863,18 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
                 **item, "starts": fmt.at(a.get("starts")) if item.get("upcoming") else None,
                 "until": fmt.at(a.get("ends")), "headline": a.get("headline"), "details": a.get("details"),
                 "instruction": a.get("instruction"), "life_threatening": a.get("life_threatening") or None,
+            }))
+        # every other alert here too (wind, coastal flood, winter, heat…), named with its times: a High Wind
+        # Warning must not vanish from a "any storms coming?" answer; weather_alerts has their full text
+        result["other_alerts"] = []
+        for a in everything:
+            if _is_storm(a):
+                continue
+            item = {"event": a["event"], "starts": a.get("starts")}
+            _mark_upcoming(item, fmt)
+            result["other_alerts"].append(_clean({
+                **item, "starts": fmt.at(a.get("starts")) if item.get("upcoming") else None,
+                "until": fmt.at(a.get("ends")), "life_threatening": a.get("life_threatening") or None,
             }))
     elif point or not known:
         notes.append("⚠️ Watches and warnings could not be checked right now — don't assume there are none")
@@ -907,9 +919,13 @@ def severe(place: Place, units_: str, clock: str) -> dict[str, Any]:
     return _clean(result)
 
 
+def _is_storm(alert: dict[str, Any]) -> bool:
+    return any(word in alert["event"].lower() for word in SEVERE_EVENTS)
+
+
 def severe_text(r: dict[str, Any], alerts_checked: bool = True) -> str:
     lines = []
-    for a in r.get("storm_alerts") or []:
+    for a in [*(r.get("storm_alerts") or []), *(r.get("other_alerts") or [])]:
         mark = "🚨" if a.get("life_threatening") else "⚠️"
         lines.append(f"{mark} {a['event']}{display._when(a)}")
     for day in r.get("spc_outlook") or []:
