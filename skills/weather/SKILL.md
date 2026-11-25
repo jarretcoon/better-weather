@@ -1,7 +1,7 @@
 ---
 name: weather
 description: How to answer weather questions with Better Weather — which tool to use, how to send its chat cards and radar/satellite pictures, how to talk about alerts safely, and how to set up warning pushes.
-version: 0.9.4
+version: 0.9.5
 metadata:
   hermes:
     tags: [weather, forecast, alerts, severe-weather, radar, satellite]
