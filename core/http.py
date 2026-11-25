@@ -217,7 +217,10 @@ def _problem_detail(response: httpx.Response) -> str:
     try:
         data = response.json()
     except ValueError:
-        return response.text[:160].strip()
+        text = response.text[:400].strip()
+        if text.startswith("<") or "<html" in text.lower():  # an error page, not words for a person
+            return ""
+        return text[:160]
     if isinstance(data, dict):
         return str(data.get("detail") or data.get("title") or data.get("reason") or "")[:200]
     return ""

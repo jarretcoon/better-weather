@@ -1,5 +1,5 @@
 name: better-weather
-version: 0.9.3
+version: 0.9.4
 manifest_version: 2
 api_version: 1
 requires_hermes: ">=0.23.1"

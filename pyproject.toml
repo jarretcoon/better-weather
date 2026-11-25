@@ -1,6 +1,6 @@
 [project]
 name = "better-weather"
-version = "0.9.3"
+version = "0.9.4"
 description = "Your Hermes agent's weather desk: official forecasts and warnings, radar, storm risk and chat-ready cards"
 license = "MIT"
 readme = "README.md"

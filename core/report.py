@@ -182,18 +182,33 @@ def _stale_note(label: str, fetched: http.Fetched | None, notes: list[str]) -> N
         notes.append(f"⚠️ {text}" if fetched.age_seconds >= STALE_WARN_S else text)
 
 
-def _is_daytime(sun: tuple[str, str] | None, hour: int) -> bool:
-    """Whole-hour check against that day's sunrise/sunset ("07:03", "16:54"); 7–18 when unknown."""
-    if not sun:
-        return 7 <= hour < 18
-    try:
-        up, down = (int(x[:2]) * 60 + int(x[3:5]) for x in sun)
-    except ValueError:
-        return 7 <= hour < 18
-    return up <= hour * 60 + 30 < down
+def _sun_up(at: datetime, lat: float | None, lon: float | None) -> bool | None:
+    """Whether the sun is up at *at* (the middle of an hour) at the place: sunrise and sunset (the top of the disc on
+    the horizon, with refraction), worked out locally. None without a place."""
+    if lat is None or lon is None:
+        return None
+    return astro.sun_altitude(at.timestamp(), float(lat), float(lon)) > astro.SUN_HORIZON
 
 
-def _om_hours(om: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict[str, Any]]:
+def _is_daytime(sun: tuple[str, str] | None, hour: int, at: datetime | None = None,
+                lat: float | None = None, lon: float | None = None) -> bool:
+    """Whole-hour check against that day's sunrise/sunset ("07:03", "16:54"); else the sun at the place; 7–18 last."""
+    if sun:
+        try:
+            up, down = (int(x[:2]) * 60 + int(x[3:5]) for x in sun)
+            if up != down:  # the same time for both: no sunrise or sunset that day (far north or south)
+                return up <= hour * 60 + 30 < down
+        except ValueError:
+            pass
+    if at is not None:
+        computed = _sun_up(at + timedelta(minutes=30), lat, lon)
+        if computed is not None:
+            return computed
+    return 7 <= hour < 18
+
+
+def _om_hours(om: http.Fetched | None, fmt: _Fmt, count: int, lat: float | None = None,
+              lon: float | None = None) -> list[dict[str, Any]]:
     data = (om.data if om else None) or {}
     hourly = data.get("hourly") or {}
     times = hourly.get("time") or []
@@ -216,7 +231,7 @@ def _om_hours(om: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict[str, 
 
         out.append({
             "time": units.day_clock(dt, fmt.clock, fmt.now),
-            "_day": _is_daytime(sun_by_day.get(str(stamp)[:10]), dt.hour),
+            "_day": _is_daytime(sun_by_day.get(str(stamp)[:10]), dt.hour, dt, lat, lon),
             "temp": units.temp_value(pick("temperature_2m"), fmt.units),
             "feels_like": units.temp_value(pick("apparent_temperature"), fmt.units),
             "sky": openmeteo.describe(pick("weather_code")),
@@ -230,7 +245,8 @@ def _om_hours(om: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict[str, 
     return out
 
 
-def _nws_hours(fetched: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict[str, Any]]:
+def _nws_hours(fetched: http.Fetched | None, fmt: _Fmt, count: int, lat: float | None = None,
+               lon: float | None = None) -> list[dict[str, Any]]:
     periods = (((fetched.data if fetched else None) or {}).get("properties") or {}).get("periods") or []
     out = []
     for p in periods:
@@ -238,9 +254,11 @@ def _nws_hours(fetched: http.Fetched | None, fmt: _Fmt, count: int) -> list[dict
         if end is not None and end <= fmt.now:
             continue
         start = units.parse_time(p.get("startTime"))
+        # the NWS's isDaytime is a fixed 6 AM–6 PM, not the sun: a 5 PM hour in November is night
+        sun = _sun_up(start + timedelta(minutes=30), lat, lon) if start is not None else None
         out.append({
             "time": fmt.at(start),
-            "_day": bool(p.get("isDaytime")),
+            "_day": bool(p.get("isDaytime")) if sun is None else sun,
             "temp": p.get("temperature"),
             "sky": p.get("shortForecast"),
             "precip_chance_pct": (p.get("probabilityOfPrecipitation") or {}).get("value") or 0,
@@ -365,7 +383,9 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         al_job = jobs.start("NWS alerts", nws.alerts_at, place.lat, place.lon)
 
     om = om_job.result(notes)
+    before = len(notes)
     obs = obs_job.result(notes) if obs_job else None
+    obs_failed = len(notes) > before  # the station fetch itself failed (its note says so), not "none near"
     fc = fc_job.result(notes) if fc_job else None
     al = al_job.result(notes) if al_job else None
     fmt = _Fmt(units_, clock, _place_tz(place, point, om))
@@ -417,7 +437,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         if point and obs:
             notes.append(f"Nearest station report is {obs.get('age_min')} min old; "
                          "showing the model estimate")
-        elif point:
+        elif point and not obs_failed:
             notes.append("No recent station report nearby; showing the model estimate")
     elif obs:  # old report and no model data: better than nothing, clearly labelled
         current = {
@@ -430,7 +450,7 @@ def now(place: Place, units_: str, clock: str) -> dict[str, Any]:
         reading_from = _reading_from(obs)
         notes.append(f"Only an old station report is available ({obs.get('age_min')} min old)")
 
-    next_hours = _om_hours(om, fmt, 8)  # for the card's "next hours" line only
+    next_hours = _om_hours(om, fmt, 8, place.lat, place.lon)  # for the card's "next hours" line only
 
     periods = _nws_periods(fc, fmt, 3, detailed_for=2) if fc else []
     if periods:
@@ -608,12 +628,12 @@ def forecast(place: Place, units_: str, clock: str, *, days: int = 7, hourly: bo
     result: dict[str, Any] = {"place": place.public(), "as_of": units.clock(fmt.now, fmt.clock),
                               "units": units_}
     if hourly:
-        rows = _nws_hours(nws_fc, fmt, hours) if nws_fc else []
+        rows = _nws_hours(nws_fc, fmt, hours, place.lat, place.lon) if nws_fc else []
         if rows:
             sources.append("NWS hourly forecast")
             _stale_note("NWS hourly forecast", nws_fc, notes)
         else:
-            rows = _om_hours(om, fmt, hours)
+            rows = _om_hours(om, fmt, hours, place.lat, place.lon)
             if rows:
                 sources.append("Open-Meteo")
         result["hours"] = rows
@@ -713,6 +733,15 @@ def alerts(place: Place | None, area: str | None, clock: str) -> dict[str, Any]:
                               display.alerts_card(result))
 
 
+def _iso_times(item: dict[str, Any], fmt: _Fmt) -> None:
+    """`starts_iso` / `ends_iso` beside the worded times (English, in the place's 12/24 h): for clients that word them
+    in their own language and clock (weather.lou.zone, its Android app)."""
+    for key in ("starts", "ends"):
+        moment = fmt.moment(item.get(key))
+        if moment is not None:
+            item[f"{key}_iso"] = moment.isoformat()
+
+
 def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
     fmt = _Fmt("us", clock, units.zone(place.timezone))
     country = (place.country or "").upper()
@@ -720,6 +749,7 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
         items = intl_alerts.canada(place.lat, place.lon)
         for a in items:
             _mark_upcoming(a, fmt)
+            _iso_times(a, fmt)
             for key in ("starts", "ends", "next_update_by"):
                 a[key] = fmt.at(a.get(key))
         out = {"where": place.name, "place": place.public(), "count": len(items), "alerts": [_clean(a) for a in items],
@@ -734,6 +764,7 @@ def _intl_alerts(place: Place, clock: str) -> dict[str, Any]:
         for group in ("exact_matches", "region_name_matches", "orange_and_red_in_country"):
             for a in eu[group]:
                 _mark_upcoming(a, fmt)
+                _iso_times(a, fmt)
                 a["starts"], a["ends"] = fmt.at(a.get("starts")), fmt.at(a.get("ends"))
         found = eu["exact_matches"] + eu["region_name_matches"]
         big = eu["orange_and_red_in_country"]  # the first dozen: count them from the country's totals
